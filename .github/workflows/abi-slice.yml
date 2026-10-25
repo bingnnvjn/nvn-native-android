@@ -1,0 +1,432 @@
+name: abi-slice
+
+# CI for the #30 ABI vertical slice.
+#   pc-x86_64      — offscreen Vulkan (Mesa lavapipe), full NVN/tests leg.
+#   arm64-linux    — same tests natively on AArch64 with x18 reserved, so the
+#                    AAPCS64/LSE/TLS/thunk contract is exercised without a device.
+#   android-aarch64— cross-build only: libnvn_host.so + abi_guest + run_android.sh
+#                    are uploaded as an artifact. GitHub-hosted CI never runs the
+#                    Android binary; the device leg is scripts/run_android.sh.
+#
+# No secrets are used anywhere in this workflow.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - spike/abi-slice
+    paths:
+      - 'spike/abi-slice/**'
+      - '.github/workflows/abi-slice.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pc-x86_64:
+    name: pc-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Mesa / Vulkan / glslang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers vulkan-tools vulkan-validationlayers \
+            glslang-tools libvulkan-dev build-essential
+
+      - name: Install Rust stable
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "rustup not found; installing a minimal toolchain"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo --version
+          rustc --version
+
+      - name: Build nvn_host (release, default vk feature)
+        working-directory: spike/abi-slice
+        run: cargo build --release
+
+      - name: Configure lavapipe ICD
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          mkdir -p dist/pc
+          icd=""
+          for f in /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+                   /usr/share/vulkan/icd.d/lvp_icd.json; do
+            if [ -f "$f" ]; then icd="$f"; break; fi
+          done
+          if [ -z "$icd" ]; then
+            for f in /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+              if [ -f "$f" ]; then icd="$f"; break; fi
+            done
+          fi
+          if [ -n "$icd" ]; then
+            echo "lavapipe ICD: $icd"
+            echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+            echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          else
+            echo "::warning::lavapipe ICD JSON not found; falling back to the loader default"
+          fi
+
+      - name: Compile C guest
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          mkdir -p dist/pc
+          cp target/release/libnvn_host.so dist/pc/
+          cc -std=c11 -O2 -fno-stack-protector -Iinclude guest/guest.c \
+            -o dist/pc/abi_guest \
+            -Ltarget/release -lnvn_host \
+            -Wl,-rpath,'$ORIGIN' \
+            -ldl -lpthread -lm
+          readelf -h dist/pc/abi_guest | sed -n '1,20p'
+
+      - name: Verify lavapipe (vulkaninfo --summary)
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          mkdir -p dist/pc
+          if ! vulkaninfo --summary > dist/pc/vulkaninfo.txt 2>&1; then
+            cat dist/pc/vulkaninfo.txt
+            echo "::error::vulkaninfo --summary failed"
+            exit 1
+          fi
+          cat dist/pc/vulkaninfo.txt
+          grep -qi 'deviceName' dist/pc/vulkaninfo.txt
+
+      - name: Guest — all
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          ./dist/pc/abi_guest all 2>&1 | tee pc-all.log
+          # The guest exits non-zero on any failed check and always ends with
+          # SUMMARY {"mode":"all","ok":true,...}; assert that summary too.
+          grep -q '"ok":true' pc-all.log
+
+      - name: Guest — unimplemented (expect SIGABRT / 134)
+        working-directory: spike/abi-slice
+        run: |
+          set +e
+          ./dist/pc/abi_guest unimplemented > pc-unimplemented.log 2>&1
+          rc=$?
+          set -e
+          cat pc-unimplemented.log
+          echo "abi_guest unimplemented exit code: $rc (expected 134 = SIGABRT)"
+          test "$rc" -eq 134
+
+      - name: Collect PC ELF metadata
+        if: always()
+        working-directory: spike/abi-slice
+        run: |
+          set +e
+          mkdir -p dist/pc
+          readelf -h dist/pc/abi_guest > dist/pc/readelf-h.txt 2>&1
+          readelf -d dist/pc/abi_guest > dist/pc/readelf-d.txt 2>&1
+          readelf -d dist/pc/libnvn_host.so > dist/pc/readelf-d-libnvn_host.txt 2>&1
+          ldd dist/pc/abi_guest > dist/pc/ldd.txt 2>&1
+          ls -l dist/pc > dist/pc/ls.txt 2>&1
+          set -e
+
+      - name: Upload PC artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-slice-pc
+          path: |
+            spike/abi-slice/pc-all.log
+            spike/abi-slice/pc-unimplemented.log
+            spike/abi-slice/dist/pc/
+          if-no-files-found: warn
+
+  # Public-repo ARM64 runner. Left as a normal, hard-failing job on purpose: if
+  # the label is unavailable we want a visible red check, not a silently skipped
+  # leg. Do not add continue-on-error here.
+  arm64-linux:
+    name: arm64-linux
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Mesa / Vulkan / glslang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers vulkan-tools vulkan-validationlayers \
+            glslang-tools libvulkan-dev build-essential
+
+      - name: Install Rust stable
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "rustup not found; installing a minimal toolchain"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo --version
+          rustc --version
+
+      - name: Build nvn_host (+reserve-x18, release)
+        working-directory: spike/abi-slice
+        env:
+          RUSTFLAGS: "-C target-feature=+reserve-x18"
+        run: cargo build --release
+
+      - name: Configure lavapipe ICD
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          mkdir -p dist/arm64
+          icd=""
+          for f in /usr/share/vulkan/icd.d/lvp_icd.aarch64.json \
+                   /usr/share/vulkan/icd.d/lvp_icd.json; do
+            if [ -f "$f" ]; then icd="$f"; break; fi
+          done
+          if [ -z "$icd" ]; then
+            for f in /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+              if [ -f "$f" ]; then icd="$f"; break; fi
+            done
+          fi
+          if [ -n "$icd" ]; then
+            echo "lavapipe ICD: $icd"
+            echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+            echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          else
+            echo "::warning::lavapipe ICD JSON not found; falling back to the loader default"
+          fi
+
+      - name: Compile C guest
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          mkdir -p dist/arm64
+          cp target/release/libnvn_host.so dist/arm64/
+          cc -std=c11 -O2 -fno-stack-protector -ffixed-x18 -DNVN_X18_RESERVED=1 -Iinclude guest/guest.c \
+            -o dist/arm64/abi_guest \
+            -Ltarget/release -lnvn_host \
+            -Wl,-rpath,'$ORIGIN' \
+            -ldl -lpthread -lm
+          readelf -h dist/arm64/abi_guest | sed -n '1,20p'
+
+      - name: Verify lavapipe (vulkaninfo --summary)
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          mkdir -p dist/arm64
+          if ! vulkaninfo --summary > dist/arm64/vulkaninfo.txt 2>&1; then
+            cat dist/arm64/vulkaninfo.txt
+            echo "::error::vulkaninfo --summary failed"
+            exit 1
+          fi
+          cat dist/arm64/vulkaninfo.txt
+          grep -qi 'deviceName' dist/arm64/vulkaninfo.txt
+
+      - name: Guest — all
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          ./dist/arm64/abi_guest all 2>&1 | tee arm64-all.log
+          grep -q '"ok":true' arm64-all.log
+
+      - name: Guest — gate
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          ./dist/arm64/abi_guest gate 2>&1 | tee arm64-gate.log
+          grep -q '"ok":true' arm64-gate.log
+
+      - name: Guest — stackgate
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          ./dist/arm64/abi_guest stackgate 2>&1 | tee arm64-stackgate.log
+          grep -q '"ok":true' arm64-stackgate.log
+
+      - name: Guest — unimplemented (expect SIGABRT / 134)
+        working-directory: spike/abi-slice
+        run: |
+          set +e
+          ./dist/arm64/abi_guest unimplemented > arm64-unimplemented.log 2>&1
+          rc=$?
+          set -e
+          cat arm64-unimplemented.log
+          echo "abi_guest unimplemented exit code: $rc (expected 134 = SIGABRT)"
+          test "$rc" -eq 134
+
+      - name: Collect arm64 ELF / thunk evidence
+        if: always()
+        working-directory: spike/abi-slice
+        run: |
+          set +e
+          mkdir -p dist/arm64
+          uname -a > dist/arm64/uname.txt 2>&1
+          cc --version > dist/arm64/cc-version.txt 2>&1
+          readelf -h dist/arm64/abi_guest > dist/arm64/readelf-h-abi_guest.txt 2>&1
+          readelf -h dist/arm64/libnvn_host.so > dist/arm64/readelf-h-libnvn_host.txt 2>&1
+          readelf -d dist/arm64/abi_guest > dist/arm64/readelf-d-abi_guest.txt 2>&1
+          ldd dist/arm64/abi_guest > dist/arm64/ldd.txt 2>&1
+          objdump -d dist/arm64/libnvn_host.so > dist/arm64/objdump.txt 2>&1
+          grep -A4 -E '<nvn_(thunk|gate)_' dist/arm64/objdump.txt \
+            > dist/arm64/objdump-thunks-raw.txt 2>&1
+          head -200 dist/arm64/objdump-thunks-raw.txt > dist/arm64/objdump-thunks.txt 2>&1
+          grep -n 'stadd' dist/arm64/objdump.txt > dist/arm64/stadd.txt 2>&1
+          echo "stadd hits: $(grep -c 'stadd' dist/arm64/objdump.txt)"
+          set -e
+
+      - name: Upload arm64 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-slice-arm64
+          path: |
+            spike/abi-slice/arm64-all.log
+            spike/abi-slice/arm64-gate.log
+            spike/abi-slice/arm64-stackgate.log
+            spike/abi-slice/arm64-unimplemented.log
+            spike/abi-slice/dist/arm64/
+          if-no-files-found: warn
+
+  android-aarch64:
+    name: android-aarch64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install glslang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends glslang-tools
+
+      - name: Install Rust stable + Android target
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "rustup not found; installing a minimal toolchain"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+          cargo --version
+          rustc --version
+
+      - name: Set up Android NDK (r27d)
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27d
+
+      - name: Configure Android cross toolchain
+        env:
+          NDK_PATH_FROM_ACTION: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          NDK="${ANDROID_NDK_HOME:-${NDK_PATH_FROM_ACTION:-}}"
+          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+            echo "::error::ANDROID_NDK_HOME is unset and setup-ndk gave no ndk-path"
+            exit 1
+          fi
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          CC_BIN="$TOOLCHAIN/bin/aarch64-linux-android26-clang"
+          AR_BIN="$TOOLCHAIN/bin/llvm-ar"
+          test -x "$CC_BIN" || { echo "::error::missing $CC_BIN"; exit 1; }
+          test -x "$AR_BIN" || { echo "::error::missing $AR_BIN"; exit 1; }
+          {
+            echo "ANDROID_NDK_HOME=$NDK"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_BIN"
+            echo "CC_aarch64_linux_android=$CC_BIN"
+            echo "AR_aarch64_linux_android=$AR_BIN"
+            echo "ABI_SLICE_NDK_BIN=$TOOLCHAIN/bin"
+          } >> "$GITHUB_ENV"
+          echo "NDK:      $NDK"
+          echo "CC:       $CC_BIN"
+          "$CC_BIN" --version
+
+      - name: Build nvn_host for aarch64-linux-android
+        working-directory: spike/abi-slice
+        env:
+          RUSTFLAGS: "-C target-feature=+reserve-x18"
+        run: cargo build --release --target aarch64-linux-android
+
+      - name: Package Android artifact
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          NDK_BIN="${ABI_SLICE_NDK_BIN:?ABI_SLICE_NDK_BIN is not set}"
+          CC_BIN="${CC_aarch64_linux_android:-$NDK_BIN/aarch64-linux-android26-clang}"
+          READELF="$NDK_BIN/llvm-readelf"
+          OBJDUMP="$NDK_BIN/llvm-objdump"
+
+          mkdir -p dist/android
+          cp target/aarch64-linux-android/release/libnvn_host.so dist/android/
+          "$CC_BIN" -std=c11 -O2 -fno-stack-protector -ffixed-x18 -DNVN_X18_RESERVED=1 -Iinclude guest/guest.c \
+            -o dist/android/abi_guest \
+            -Ltarget/aarch64-linux-android/release -lnvn_host \
+            -Wl,-rpath,'$ORIGIN' \
+            -llog -ldl -lm -lpthread -fPIE -pie
+          cp scripts/run_android.sh dist/android/
+          chmod +x dist/android/run_android.sh
+
+          {
+            echo "== abi_guest: ELF header =="
+            "$READELF" -h dist/android/abi_guest
+            echo
+            echo "== libnvn_host.so: ELF header =="
+            "$READELF" -h dist/android/libnvn_host.so
+            echo
+            echo "== abi_guest: dynamic section (NEEDED) =="
+            "$READELF" -d dist/android/abi_guest
+            echo
+            echo "== libnvn_host.so: dynamic section (NEEDED) =="
+            "$READELF" -d dist/android/libnvn_host.so
+            echo
+            echo "== symbols: nvnBootstrapLoader / nva_nvn_resolve =="
+            "$READELF" --dyn-syms --wide dist/android/libnvn_host.so \
+              | grep -E 'nvnBootstrapLoader|nva_nvn_resolve' || true
+            echo "---- guest imports ----"
+            "$READELF" --dyn-syms --wide dist/android/abi_guest \
+              | grep -E 'nvnBootstrapLoader|nva_nvn_resolve' || true
+          } > dist/android/readelf.txt 2>&1
+
+          "$OBJDUMP" -d dist/android/libnvn_host.so > dist/android/objdump-libnvn_host.txt
+          grep -A4 -E '<nvn_(thunk|gate)_' dist/android/objdump-libnvn_host.txt \
+            > dist/android/objdump-thunks-raw.txt || true
+          head -200 dist/android/objdump-thunks-raw.txt > dist/android/objdump-thunks.txt
+
+          ( cd dist/android && sha256sum abi_guest libnvn_host.so run_android.sh > sha256sum.txt )
+          tar czf abi-slice-android.tar.gz -C dist/android .
+          ls -l abi-slice-android.tar.gz dist/android
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-slice-android
+          path: |
+            spike/abi-slice/abi-slice-android.tar.gz
+            spike/abi-slice/dist/android/
+          if-no-files-found: error

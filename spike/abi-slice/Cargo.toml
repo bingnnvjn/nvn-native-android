@@ -1,0 +1,23 @@
+[package]
+name = "nvn_host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "#30 ABI spike host/engine (not production)"
+
+[lib]
+name = "nvn_host"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["vk"]
+vk = []
+
+[dependencies]
+ash = "0.38"
+libc = "0.2"
+
+[profile.release]
+panic = "abort"
+lto = false
+codegen-units = 1

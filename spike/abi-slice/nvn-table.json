@@ -1,0 +1,482 @@
+{
+  "version": 1,
+  "source": {
+    "protos": "work/research/refs/d2r/nvn_protos.h",
+    "slots": "work/research/refs/d2r/nvn_slots.tsv"
+  },
+  "slots": [
+    {
+      "slot": 0,
+      "name": "nvnDeviceBuilderSetDefaults",
+      "ret": "void",
+      "args": [
+        "NVNdeviceBuilder*"
+      ],
+      "ret_class": "void",
+      "arg_gpr": 1,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef void (*NVNT_nvnDeviceBuilderSetDefaults)(NVNdeviceBuilder*);",
+      "d2r_slot": "320e910",
+      "d2r_nuses": 1
+    },
+    {
+      "slot": 1,
+      "name": "nvnDeviceInitialize",
+      "ret": "NVNboolean",
+      "args": [
+        "NVNdevice*",
+        "const NVNdeviceBuilder*"
+      ],
+      "ret_class": "bool32",
+      "arg_gpr": 2,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef NVNboolean (*NVNT_nvnDeviceInitialize)(NVNdevice*, const NVNdeviceBuilder*);",
+      "d2r_slot": "320e928",
+      "d2r_nuses": 1,
+      "note": "header returns NVNboolean (= uint8_t in nvn.h); guest declares uint32_t, same w0 in practice"
+    },
+    {
+      "slot": 2,
+      "name": "nvnDeviceGetProcAddress",
+      "ret": "PFNNVNGENERICFUNCPTRPROC",
+      "args": [
+        "const NVNdevice*",
+        "const char*"
+      ],
+      "ret_class": "pointer",
+      "arg_gpr": 2,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef PFNNVNGENERICFUNCPTRPROC (*NVNT_nvnDeviceGetProcAddress)(const NVNdevice*, const char*);",
+      "d2r_slot": "320e940",
+      "d2r_nuses": 1,
+      "note": "header returns PFNNVNGENERICFUNCPTRPROC (= void(*)(void)); DESIGN.md says void*; same 8 B register"
+    },
+    {
+      "slot": 3,
+      "name": "nvnCommandBufferSetDepthRange",
+      "ret": "void",
+      "args": [
+        "NVNcommandBuffer*",
+        "float",
+        "float"
+      ],
+      "ret_class": "void",
+      "arg_gpr": 1,
+      "arg_fpr": 2,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef void (*NVNT_nvnCommandBufferSetDepthRange)(NVNcommandBuffer*, float, float);",
+      "d2r_slot": "320f630",
+      "d2r_nuses": 2
+    },
+    {
+      "slot": 4,
+      "name": "nvnCommandBufferClearColor",
+      "ret": "void",
+      "args": [
+        "NVNcommandBuffer*",
+        "int",
+        "const float*",
+        "int"
+      ],
+      "ret_class": "void",
+      "arg_gpr": 4,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef void (*NVNT_nvnCommandBufferClearColor)(NVNcommandBuffer*, int, const float*, int);",
+      "d2r_slot": "320f5d8",
+      "d2r_nuses": 1
+    },
+    {
+      "slot": 5,
+      "name": "nvnCommandBufferDrawArrays",
+      "ret": "void",
+      "args": [
+        "NVNcommandBuffer*",
+        "NVNdrawPrimitive",
+        "int",
+        "int"
+      ],
+      "ret_class": "void",
+      "arg_gpr": 4,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef void (*NVNT_nvnCommandBufferDrawArrays)(NVNcommandBuffer*, NVNdrawPrimitive, int, int);",
+      "d2r_slot": "320f590",
+      "d2r_nuses": 2,
+      "note": "2nd arg is NVNdrawPrimitive (enum, 32-bit), guest writes int; same register"
+    },
+    {
+      "slot": 6,
+      "name": "nvnQueueSubmitCommands",
+      "ret": "void",
+      "args": [
+        "NVNqueue*",
+        "int",
+        "const NVNcommandHandle*"
+      ],
+      "ret_class": "void",
+      "arg_gpr": 3,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef void (*NVNT_nvnQueueSubmitCommands)(NVNqueue*, int, const NVNcommandHandle*);",
+      "d2r_slot": "320ead8",
+      "d2r_nuses": 1,
+      "note": "const NVNcommandHandle*; nvn.h has NVNcommandHandle = uint64_t, nvn_guest.h has void*, same 8 B element"
+    },
+    {
+      "slot": 7,
+      "name": "nvnQueueFinish",
+      "ret": "void",
+      "args": [
+        "NVNqueue*"
+      ],
+      "ret_class": "void",
+      "arg_gpr": 1,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef void (*NVNT_nvnQueueFinish)(NVNqueue*);",
+      "d2r_slot": "320eae8",
+      "d2r_nuses": 1
+    },
+    {
+      "slot": 8,
+      "name": "nvnSamplerGetLodBias",
+      "ret": "float",
+      "args": [
+        "const NVNsampler*"
+      ],
+      "ret_class": "float",
+      "arg_gpr": 1,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef float (*NVNT_nvnSamplerGetLodBias)(const NVNsampler*);",
+      "d2r_slot": "320f148",
+      "d2r_nuses": 0
+    },
+    {
+      "slot": 9,
+      "name": "nvnBufferGetAddress",
+      "ret": "NVNbufferAddress",
+      "args": [
+        "const NVNbuffer*"
+      ],
+      "ret_class": "uint64",
+      "arg_gpr": 1,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "impl",
+      "proto": "typedef NVNbufferAddress (*NVNT_nvnBufferGetAddress)(const NVNbuffer*);",
+      "d2r_slot": "320ed58",
+      "d2r_nuses": 0,
+      "note": "header returns NVNbufferAddress (= uint64_t in nvn.h); DESIGN.md says u64; same x0"
+    },
+    {
+      "slot": 10,
+      "name": "nvnCommandBufferDispatchCompute",
+      "ret": "void",
+      "args": [
+        "NVNcommandBuffer*",
+        "int",
+        "int",
+        "int"
+      ],
+      "ret_class": "void",
+      "arg_gpr": 4,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "abort",
+      "proto": "typedef void (*NVNT_nvnCommandBufferDispatchCompute)(NVNcommandBuffer*, int, int, int);",
+      "d2r_slot": "320f5f8",
+      "d2r_nuses": 3
+    },
+    {
+      "slot": 11,
+      "name": "nvnDeviceGetCurrentTimestampInNanoseconds",
+      "ret": "uint64_t",
+      "args": [
+        "const NVNdevice*"
+      ],
+      "ret_class": "uint64",
+      "arg_gpr": 1,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "typed_zero",
+      "proto": "typedef uint64_t (*NVNT_nvnDeviceGetTimestampInNanoseconds)(const NVNdevice*, const NVNcounterData*);",
+      "d2r_slot": "320e9c8",
+      "d2r_nuses": 0,
+      "note": "renamed from nvnDeviceGetTimestampInNanoseconds (that one has 2 args); this name is the 1-arg variant"
+    },
+    {
+      "slot": 12,
+      "name": "nvaSpikeTlsProbe",
+      "ret": "uint64_t",
+      "args": [],
+      "ret_class": "uint64",
+      "arg_gpr": 0,
+      "arg_fpr": 0,
+      "stack_bytes": 0,
+      "stub": "probe",
+      "proto": "MISSING",
+      "d2r_slot": null,
+      "d2r_nuses": null,
+      "note": "spike-local probe: absent from nvn_protos.h and nvn_slots.tsv; signature from include/nvn_guest.h"
+    },
+    {
+      "slot": 13,
+      "name": "nvaSpikeStackProbe",
+      "ret": "uint64_t",
+      "args": [
+        "uint64_t",
+        "uint64_t",
+        "uint64_t",
+        "uint64_t",
+        "uint64_t",
+        "uint64_t",
+        "uint64_t",
+        "uint64_t",
+        "uint64_t",
+        "uint64_t"
+      ],
+      "ret_class": "uint64",
+      "arg_gpr": 10,
+      "arg_fpr": 0,
+      "stack_bytes": 16,
+      "stub": "probe",
+      "proto": "MISSING",
+      "d2r_slot": null,
+      "d2r_nuses": null,
+      "note": "spike-local probe: absent from nvn_protos.h and nvn_slots.tsv; signature from include/nvn_guest.h"
+    }
+  ],
+  "stats": {
+    "total_typedefs": 477,
+    "slot_rows": 523,
+    "slots_without_typedef": 46,
+    "slots_without_typedef_verified": true,
+    "slots_without_typedef_method": "523 tsv rows - 477 parsed typedefs = 46; the 46 tsv names absent from the header equal the 46 names listed in nvn_protos.h (comment block, duplicated zh/en); every typedef name exists in tsv",
+    "ret_class_counts": {
+      "void": 316,
+      "bool32": 44,
+      "pointer": 10,
+      "uint64": 42,
+      "int32": 55,
+      "struct16": 2,
+      "struct_gt16": 3,
+      "float": 5
+    },
+    "ret_name_counts": {
+      "void": 316,
+      "NVNboolean": 44,
+      "int": 21,
+      "size_t": 18,
+      "ptrdiff_t": 12,
+      "float": 5,
+      "uint64_t": 5,
+      "NVNmemoryPool": 3,
+      "NVNbufferAddress": 2,
+      "NVNformat": 2,
+      "NVNmemoryPoolFlags": 2,
+      "NVNnativeWindow": 2,
+      "NVNsamplerReduction": 2,
+      "NVNstorageClass": 2,
+      "NVNtextureDepthStencilMode": 2,
+      "NVNtextureFlags": 2,
+      "NVNtextureHandle": 2,
+      "NVNtextureTarget": 2,
+      "const NVNmemoryPool*": 2,
+      "uint32_t": 2,
+      "void*": 2,
+      "NVNalphaFunc": 1,
+      "NVNblendAdvancedMode": 1,
+      "NVNblendAdvancedOverlap": 1,
+      "NVNcommandHandle": 1,
+      "NVNcoverageModulationMode": 1,
+      "NVNdebugDomainId": 1,
+      "NVNdepthFunc": 1,
+      "NVNdepthMode": 1,
+      "NVNface": 1,
+      "NVNfrontFace": 1,
+      "NVNimageHandle": 1,
+      "NVNlogicOp": 1,
+      "NVNmemoryPool*": 1,
+      "NVNpolygonMode": 1,
+      "NVNpolygonOffsetEnable": 1,
+      "NVNqueueAcquireTextureResult": 1,
+      "NVNqueueGetErrorResult": 1,
+      "NVNseparateSamplerHandle": 1,
+      "NVNseparateTextureHandle": 1,
+      "NVNstencilFunc": 1,
+      "NVNsyncWaitResult": 1,
+      "NVNtextureAddress": 1,
+      "NVNwindowAcquireTextureResult": 1,
+      "NVNwindowOriginMode": 1,
+      "PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC": 1,
+      "PFNNVNGENERICFUNCPTRPROC": 1,
+      "const void*": 1
+    },
+    "unknown_class_count": 0,
+    "float_returns": [
+      "nvnSamplerBuilderGetLodBias",
+      "nvnSamplerBuilderGetMaxAnisotropy",
+      "nvnSamplerBuilderGetLodSnap",
+      "nvnSamplerGetLodBias",
+      "nvnSamplerGetMaxAnisotropy"
+    ],
+    "pointer_returns": [
+      {
+        "name": "nvnDeviceGetProcAddress",
+        "ret": "PFNNVNGENERICFUNCPTRPROC"
+      },
+      {
+        "name": "nvnWindowBuilderGetNativeWindow",
+        "ret": "NVNnativeWindow"
+      },
+      {
+        "name": "nvnWindowGetNativeWindow",
+        "ret": "NVNnativeWindow"
+      },
+      {
+        "name": "nvnMemoryPoolMap",
+        "ret": "void*"
+      },
+      {
+        "name": "nvnTexturePoolGetMemoryPool",
+        "ret": "const NVNmemoryPool*"
+      },
+      {
+        "name": "nvnSamplerPoolGetMemoryPool",
+        "ret": "const NVNmemoryPool*"
+      },
+      {
+        "name": "nvnBufferMap",
+        "ret": "void*"
+      },
+      {
+        "name": "nvnBufferGetMemoryPool",
+        "ret": "NVNmemoryPool*"
+      },
+      {
+        "name": "nvnTextureBuilderGetPackagedTextureData",
+        "ret": "const void*"
+      },
+      {
+        "name": "nvnCommandBufferGetMemoryCallback",
+        "ret": "PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC"
+      }
+    ],
+    "address_returns": [
+      {
+        "name": "nvnMemoryPoolGetBufferAddress",
+        "ret": "NVNbufferAddress"
+      },
+      {
+        "name": "nvnBufferGetAddress",
+        "ret": "NVNbufferAddress"
+      },
+      {
+        "name": "nvnTextureGetTextureAddress",
+        "ret": "NVNtextureAddress"
+      }
+    ],
+    "struct_by_value_returns": [
+      {
+        "name": "nvnDeviceGetSeparateTextureHandle",
+        "ret": "NVNseparateTextureHandle",
+        "class": "struct16"
+      },
+      {
+        "name": "nvnDeviceGetSeparateSamplerHandle",
+        "ret": "NVNseparateSamplerHandle",
+        "class": "struct16"
+      },
+      {
+        "name": "nvnBufferBuilderGetMemoryPool",
+        "ret": "NVNmemoryPool",
+        "class": "struct_gt16"
+      },
+      {
+        "name": "nvnTextureBuilderGetMemoryPool",
+        "ret": "NVNmemoryPool",
+        "class": "struct_gt16"
+      },
+      {
+        "name": "nvnTextureGetMemoryPool",
+        "ret": "NVNmemoryPool",
+        "class": "struct_gt16"
+      }
+    ],
+    "max_gpr_args": 8,
+    "max_fpr_args": 3,
+    "gpr8_functions": [
+      "nvnCommandBufferDrawElementsInstanced",
+      "nvnCommandBufferMultiDrawElementsIndirectCount",
+      "nvnCommandBufferCopyTextureToTexture"
+    ],
+    "gpr_gt8_functions": [],
+    "fpr_gt8_functions": [],
+    "hfa_params": "none: no struct/union args except NVNseparateTextureHandle and NVNseparateSamplerHandle (8 B, integer class, 1 GPR), so no HFA",
+    "arg_count_method": "each 8 B scalar/enum/pointer arg = 1 GPR; each float = 1 FPR; 477 sigs have at most 8 args total; no stack args",
+    "ret_width_note": "NVNboolean is uint8_t in dm/gfx/nvn/include/nvn.h (d2r a8782caa), so class bool32 labels 1-byte returns; NVNcommandHandle/NVNbufferAddress/NVNtextureAddress/NVNtextureHandle/NVNimageHandle are uint64_t; size_t/ptrdiff_t are 8 B; enums are 32-bit",
+    "slots_without_typedef_names": [
+      "nvnBufferBuilderGetDevice",
+      "nvnCommandBufferInsertCheckpointDynamic",
+      "nvnCommandBufferInsertCheckpointStatic",
+      "nvnCommandBufferSetColorReductionEnable",
+      "nvnCommandBufferSetColorReductionThresholds",
+      "nvnCommandBufferSetCommandMemoryCallbackEnabled",
+      "nvnCommandBufferSetStencilCullCriteria",
+      "nvnDeviceBuilderGetFlags",
+      "nvnDeviceSetAutomaticCheckpointsByDebugGroup",
+      "nvnDeviceSetAutomaticCheckpointsEnable",
+      "nvnDeviceSetAutomaticCheckpointsSamplingInterval",
+      "nvnDeviceSetCheckpointCallStacksEnable",
+      "nvnDeviceSetCheckpointMaxCallStacksDepth",
+      "nvnEventBuilderGetMemoryOffset",
+      "nvnEventBuilderGetMemoryPool",
+      "nvnEventBuilderGetStorage",
+      "nvnEventGetMemoryOffset",
+      "nvnEventGetMemoryPool",
+      "nvnMemoryPoolBuilderGetDevice",
+      "nvnProgramSetSampleShading",
+      "nvnProgramSetShadersExt",
+      "nvnQueueBuilderGetCommandFlushThreshold",
+      "nvnQueueBuilderGetCommandMemorySize",
+      "nvnQueueBuilderGetComputeMemorySize",
+      "nvnQueueBuilderGetControlMemorySize",
+      "nvnQueueBuilderGetDevice",
+      "nvnQueueBuilderGetFlags",
+      "nvnQueueBuilderGetMemory",
+      "nvnQueueBuilderGetMemorySize",
+      "nvnQueueBuilderGetQueuePriority",
+      "nvnQueueBuilderSetQueuePriority",
+      "nvnSamplerBuilderGetDevice",
+      "nvnSyncCreateGLSync",
+      "nvnSyncInitializeFromFencedGLSync",
+      "nvnTextureBuilderGetDevice",
+      "nvnTextureBuilderGetPackagedTextureLayout",
+      "nvnTextureBuilderGetRawStorageClass",
+      "nvnTextureGetRawStorageClass",
+      "nvnWindowBuilderGetDevice",
+      "nvnWindowBuilderGetNumActiveTextures",
+      "nvnWindowBuilderGetNumTextures",
+      "nvnWindowBuilderGetTexture",
+      "nvnWindowBuilderSetNumActiveTextures",
+      "nvnWindowGetNumActiveTextures",
+      "nvnWindowGetNumTextures",
+      "nvnWindowSetNumActiveTextures"
+    ],
+    "type_width_evidence": "dm/gfx/nvn/include/nvn.h at d2r-mobile/d2r-mobile a8782caa (fetched from GitHub raw; not part of the two workspace inputs)"
+  }
+}
