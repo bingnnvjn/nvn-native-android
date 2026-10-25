@@ -213,10 +213,10 @@
       "arg_fpr": 0,
       "stack_bytes": 0,
       "stub": "typed_zero",
-      "proto": "typedef uint64_t (*NVNT_nvnDeviceGetTimestampInNanoseconds)(const NVNdevice*, const NVNcounterData*);",
-      "d2r_slot": "320e9c8",
+      "proto": "typedef uint64_t (*NVNT_nvnDeviceGetCurrentTimestampInNanoseconds)(const NVNdevice*);",
+      "d2r_slot": "320e950",
       "d2r_nuses": 0,
-      "note": "renamed from nvnDeviceGetTimestampInNanoseconds (that one has 2 args); this name is the 1-arg variant"
+      "note": "renamed from nvnDeviceGetTimestampInNanoseconds (2 args, d2r slot 320e9c8); this is the 1-arg variant"
     },
     {
       "slot": 12,
