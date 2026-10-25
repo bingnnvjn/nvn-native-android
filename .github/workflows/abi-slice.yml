@@ -388,7 +388,7 @@ jobs:
             -o dist/android/abi_guest \
             -Ltarget/aarch64-linux-android/release -lnvn_host \
             -Wl,-rpath,'$ORIGIN' \
-            -llog -ldl -lm -lpthread -fPIE -pie
+            -llog -ldl -lm -fPIE -pie
           cp scripts/run_android.sh dist/android/
           chmod +x dist/android/run_android.sh
 
