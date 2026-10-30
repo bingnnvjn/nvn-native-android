@@ -71,9 +71,13 @@ javac -source 8 -target 8 -Xlint:-options \
     android/java/com/bingnnvjn/abislice/MainActivity.java
 
 echo "==> dex"
+CLASS_FILES=()
+while IFS= read -r f; do
+    CLASS_FILES+=("$f")
+done < <(find "$BUILD/classes" -name '*.class' | sort)
 "$BT/d8" --lib "$PLATFORM/android.jar" --min-api 26 \
     --output "$BUILD/dex" \
-    $(find "$BUILD/classes" -name '*.class' | sort)
+    "${CLASS_FILES[@]}"
 
 echo "==> resources / manifest"
 "$BT/aapt2" link -o "$BUILD/base.apk" \

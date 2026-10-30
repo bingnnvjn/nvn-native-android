@@ -21,6 +21,16 @@ find where the C ABI v1 contract breaks, not to build an engine.
 No 8 MRT, no block-linear, no present, no BotW. Builds are all in CI; the
 device leg is only `adb`.
 
+## Checks
+
+```sh
+scripts/check.sh       # C layout, slot table vs nvn-table.json, JSON, bash -n
+scripts/jni_smoke.sh   # Linux JNI runtime: all, gate, abort (needs JDK + lavapipe)
+```
+
+CI runs both in the PC job. `scripts/check.sh` is cheap and needs no Vulkan.
+The C layout check compiles `include/abi_layout_check.c`; do not remove it.
+
 ## Run
 
 CI: push to `spike/abi-slice`, then download artifacts:

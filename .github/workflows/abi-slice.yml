@@ -39,7 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers vulkan-tools vulkan-validationlayers \
-            glslang-tools libvulkan-dev build-essential
+            glslang-tools libvulkan-dev build-essential shellcheck
 
       - name: Install Rust stable
         run: |
@@ -96,6 +96,10 @@ jobs:
             -ldl -lpthread -lm
           readelf -h dist/pc/abi_guest | sed -n '1,20p'
 
+      - name: Static checks (C layout, slot table, JSON, shell)
+        working-directory: spike/abi-slice
+        run: bash scripts/check.sh
+
       - name: Verify lavapipe (vulkaninfo --summary)
         working-directory: spike/abi-slice
         run: |
@@ -108,6 +112,10 @@ jobs:
           fi
           cat dist/pc/vulkaninfo.txt
           grep -qi 'deviceName' dist/pc/vulkaninfo.txt
+
+      - name: JNI smoke (Linux, same jni.c + guest.c as APK)
+        working-directory: spike/abi-slice
+        run: bash scripts/jni_smoke.sh
 
       - name: Guest — all
         working-directory: spike/abi-slice
@@ -151,6 +159,7 @@ jobs:
             spike/abi-slice/pc-all.log
             spike/abi-slice/pc-unimplemented.log
             spike/abi-slice/dist/pc/
+            spike/abi-slice/dist/jni/
           if-no-files-found: warn
 
   # Public-repo ARM64 runner. Left as a normal, hard-failing job on purpose: if
@@ -169,7 +178,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers vulkan-tools vulkan-validationlayers \
-            glslang-tools libvulkan-dev build-essential
+            glslang-tools libvulkan-dev build-essential shellcheck
 
       - name: Install Rust stable
         run: |
