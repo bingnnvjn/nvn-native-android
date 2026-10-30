@@ -485,11 +485,11 @@ jobs:
       - name: Build game-free shell APK
         run: |
           set -euo pipefail
-          # DM_ANDROID_CHECKS must stay OFF: with it ON, android/CMakeLists.txt
-          # returns at lines 15-19 and never links libdm.so (issue #15 finding).
+          # Do NOT pass DM_ANDROID_CHECKS=ON: android/CMakeLists.txt then returns
+          # at lines 15-19 and never links libdm.so (issue #15 finding). It is a
+          # CMake option, not a Gradle flag, so there is nothing to turn off here.
           gradle --no-daemon -p dm/android :app:assembleDebug :app:lintDebug \
-            -PdmGenDir=ci/dmgendir -PdmPython=$(command -v python3) \
-            -DDM_ANDROID_CHECKS=OFF
+            -PdmGenDir=ci/dmgendir -PdmPython=$(command -v python3)
 
       - name: Guard — APK has no game content
         run: bash ci/guard/scan_apk.sh dm/android/app/build/outputs/apk/debug/app-debug.apk
@@ -498,6 +498,7 @@ jobs:
         env:
           GUARD_MODE: product
           GUARD_PACKAGE: com.bingnnvjn.nva
+          GUARD_TARGET_SDK: '36'
         run: bash ci/guard/check_manifest.sh dm/android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Guard — L6 packaging assertions
