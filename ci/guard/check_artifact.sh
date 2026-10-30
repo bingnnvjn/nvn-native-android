@@ -74,10 +74,10 @@ case $KIND in
 esac
 
 # No build-host paths in any text member.
-if grep -r -l -E '/(home|Users)/[A-Za-z0-9._-]+/(work|DeepSeekharness|dm-work)' "$DIR" \
-     --include='*.txt' --include='*.json' --include='*.log' >/dev/null 2>&1; then
-  report "absolute build-host path in an artifact text file"
-fi
+while IFS= read -r f; do
+  report "absolute build-host path in artifact text file: $f"
+done < <(grep -r -l -E '/(home|Users)/[A-Za-z0-9._-]+/(work|DeepSeekharness|dm-work)' "$DIR" \
+           --include='*.txt' --include='*.json' --include='*.log' 2>/dev/null || true)
 
 if ((fail)); then
   echo "guard: artifact FAILED its contract (docs/PIPELINE.md §3)." >&2

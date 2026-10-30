@@ -124,7 +124,7 @@ fi
 # "v1 scheme: false" (measured in run 41089559337). Pinning a scheme that
 # cannot exist would make the gate lie.
 "$BT/apksigner" sign "${SIGN_ARGS[@]}" \
-    --v2-signing-enabled true --v3-signing-enabled true \
+    --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false \
     --min-sdk-version 26 --out "$OUT/abi-slice.apk" "$BUILD/aligned.apk"
 "$BT/apksigner" verify --verbose --min-sdk-version 26 "$OUT/abi-slice.apk" \
     > "$OUT/apksigner-verify.txt" 2>&1
