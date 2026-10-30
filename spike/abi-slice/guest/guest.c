@@ -347,6 +347,8 @@ static int guest_init(void)
     if (!g_table) {
         failf("nva_gfx_get_nvn_table returned NULL");
         (void)assertion_end();
+        nva_gfx_destroy(g_gfx);
+        g_gfx = NULL;
         return 0;
     }
 
@@ -371,6 +373,8 @@ static int guest_init(void)
 
     if (g_assertion_failures != 0) {
         (void)assertion_end();
+        nva_gfx_destroy(g_gfx);
+        g_gfx = NULL;
         return 0;
     }
 
@@ -1132,11 +1136,15 @@ static int run_stackgate_mode(void)
                    ",\"expected_sum\":55", sum);
     ok = assertion_end();
     emit_summary(mode);
+    nva_gfx_destroy(g_gfx);
+    g_gfx = NULL;
     return ok ? 0 : 1;
 #else
     printf("SKIP stackgate\n");
     fflush(stdout);
     emit_summary(mode);
+    nva_gfx_destroy(g_gfx);
+    g_gfx = NULL;
     return 0;
 #endif
 }
@@ -1200,6 +1208,8 @@ int main(int argc, char **argv)
             failf("nva_spike_set_tls_gate(1) -> %" PRIu32, s);
             (void)assertion_end();
             emit_summary(mode);
+            nva_gfx_destroy(g_gfx);
+            g_gfx = NULL;
             return 1;
         }
     }
@@ -1212,5 +1222,7 @@ int main(int argc, char **argv)
 #endif
 
     emit_summary(mode);
+    nva_gfx_destroy(g_gfx);
+    g_gfx = NULL;
     return (g_failures == 0) ? 0 : 1;
 }

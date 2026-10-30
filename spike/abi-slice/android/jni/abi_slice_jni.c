@@ -7,7 +7,12 @@
  * app process.
  */
 #include <jni.h>
+#ifdef __ANDROID__
 #include <android/log.h>
+#define JNI_LOG(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#else
+#define JNI_LOG(...) do { fprintf(stderr, "[jni] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
+#endif
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,7 +130,7 @@ Java_com_bingnnvjn_abislice_MainActivity_runNative(JNIEnv *env, jobject thiz,
     char line[128];
     snprintf(line, sizeof line, "EXIT %d", rc);
     append_line(path, line);
-    __android_log_print(ANDROID_LOG_INFO, TAG, "mode=%s exit=%d", mode, rc);
+    JNI_LOG("mode=%s exit=%d", mode, rc);
 
     (*env)->ReleaseStringUTFChars(env, jmode, mode);
     (*env)->ReleaseStringUTFChars(env, jcache, cache);
@@ -179,7 +184,7 @@ Java_com_bingnnvjn_abislice_MainActivity_runAbort(JNIEnv *env, jobject thiz,
                  WIFEXITED(status) ? WEXITSTATUS(status) : -1);
     }
     append_line(path, line);
-    __android_log_print(ANDROID_LOG_INFO, TAG, "%s", line);
+    JNI_LOG("%s", line);
 
     (*env)->ReleaseStringUTFChars(env, jcache, cache);
     return read_log(env, path);
