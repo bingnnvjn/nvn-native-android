@@ -422,6 +422,12 @@ jobs:
           tar czf abi-slice-android.tar.gz -C dist/android .
           ls -l abi-slice-android.tar.gz dist/android
 
+      - name: Build APK shell (aapt2/d8/apksigner, no Gradle)
+        working-directory: spike/abi-slice
+        env:
+          TARGET_DIR: target/aarch64-linux-android/release
+        run: bash android/build_apk.sh
+
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
@@ -429,4 +435,11 @@ jobs:
           path: |
             spike/abi-slice/abi-slice-android.tar.gz
             spike/abi-slice/dist/android/
+          if-no-files-found: error
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-slice-apk
+          path: spike/abi-slice/dist/android-apk/
           if-no-files-found: error

@@ -107,6 +107,19 @@ static int g_failures;          /* failed individual checks */
 static int g_failed_assertions; /* failed RESULT lines */
 static int g_result_count;      /* RESULT lines emitted */
 
+/* JNI/APK entry: run the harness again in the same process. */
+void abi_slice_guest_reset(void)
+{
+    g_failures = 0;
+    g_failed_assertions = 0;
+    g_result_count = 0;
+    g_assertion_failures = 0;
+    g_assertion = "init";
+    g_detail[0] = '\0';
+    g_extra[0] = '\0';
+    g_fake_tls_active = 0;
+}
+
 static void failf(const char *fmt, ...) PRINTF_LIKE(1, 2);
 
 static void failf(const char *fmt, ...)
