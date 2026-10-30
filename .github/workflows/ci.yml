@@ -429,7 +429,7 @@ jobs:
 
       - name: Guard — artifact whitelist
         run: |
-          rm -rf spike/abi-slice/dist/android-apk/build
+          rm -rf spike/abi-slice/dist/android-apk/build spike/abi-slice/dist/android-apk/lib
           bash ci/guard/check_artifact.sh spike/abi-slice/dist/android-apk abi-slice-apk
 
       - name: Upload APK
