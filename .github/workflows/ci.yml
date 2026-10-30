@@ -436,7 +436,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-apk
-          path: spike/abi-slice/dist/android-apk/
+          # Explicit members: build_apk.sh also leaves lib/arm64-v8a/ in OUT,
+          # and that duplicate .so must not ride along.
+          path: |
+            spike/abi-slice/dist/android-apk/abi-slice.apk
+            spike/abi-slice/dist/android-apk/*.txt
           if-no-files-found: error
           retention-days: 30
 
