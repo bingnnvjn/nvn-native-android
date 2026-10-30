@@ -200,7 +200,20 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 - 不做 SLSA attestation（v0 无发布信任需求；做法见 §4.3）。
 - **真机项永不进 CI**：725 第一帧、帧时间 p95、8 MRT ≤28 ms、device validation——lavapipe 跑不了，写进 CI 就是自欺。
 
-## 9. 仍未定
+## 9. 实测记录（2026-10-31）
+
+首个全绿 run：[41092359202](https://github.com/bingnnvjn/nvn-native-android/actions/runs/41092359202)——`guard` 5s、`pc-x86_64` 44s、`arm64-linux` 40s、`android-aarch64` 1m30s、`gate` 3s；四个 artifact 全部生成，APK 270,964 B，证书 SHA-256 与 `fingerprint.txt` 一致。
+
+修 CI 时撞到的四个「纸面推断错了」：
+
+1. **v1 签名在 minSdk 26 下根本不存在**：显式 `--v1-signing-enabled true` 也只得到 `v1 scheme: false`。断言改成 v2/v3。
+2. **build-tools 36 默认产出 v4 的 `.apk.idsig`**，必须显式关掉，否则 artifact 多一个必须一起分发的文件。
+3. **`aapt2 dump badging` 不再输出 `sdkVersion`/`targetSdkVersion`**（这个 manifest 形状下），minSdk/targetSdk 要读 `aapt2 dump xmltree --file AndroidManifest.xml`。
+4. **`tar` 不能在自己的输出目录里打包自己**（`file changed as we read it`）；`sha256sum` 与 `unzip -l` 也不能带绝对路径，否则 artifact 带出构建机路径。
+
+另外：runner 已强制 node24，v4 系列 action 仍工作但报弃用警告；升级到 v7/v8 是独立动作，不在本票。
+
+## 10. 仍未定
 
 - `release.p12` 的生成与保管流程（开 Release 时定）。
 - `shell-apk` 的 `ci/dmgendir` 替身在游戏版本变化后怎么再生成（#15 的已知耦合）；`dm/` 树尚未入库（无 `.gitmodules`）。
