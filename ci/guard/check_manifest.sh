@@ -26,12 +26,17 @@ EXPECT_TARGET=${GUARD_TARGET_SDK:-34}
 
 "$BT/aapt2" dump badging "$APK" > /tmp/badging.txt 2>&1 || {
   echo "guard: aapt2 dump badging failed" >&2; exit 2; }
+# build-tools 36's `dump badging` no longer prints sdkVersion/targetSdkVersion
+# for this manifest shape (observed in run 41091163738), so read them from the
+# binary manifest instead of guessing at the text format.
+"$BT/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > /tmp/xmltree.txt 2>&1 || {
+  echo "guard: aapt2 dump xmltree failed" >&2; exit 2; }
 
 # aapt2's badging output is stable but not always flush-left, and the field
 # names differ across build-tools versions; match the field anywhere on a line.
 pkg=$(sed -n "s/.*package: name='\([^']*\)'.*/\1/p" /tmp/badging.txt | head -1)
-min=$(sed -n "s/.*sdkVersion:'\([0-9]*\)'.*/\1/p" /tmp/badging.txt | head -1)
-tgt=$(sed -n "s/.*targetSdkVersion:'\([0-9]*\)'.*/\1/p" /tmp/badging.txt | head -1)
+min=$(sed -n 's/.*:minSdkVersion([^)]*)=\([0-9]*\).*/\1/p' /tmp/xmltree.txt | head -1)
+tgt=$(sed -n 's/.*:targetSdkVersion([^)]*)=\([0-9]*\).*/\1/p' /tmp/xmltree.txt | head -1)
 nat=$(sed -n "s/.*native-code: \(.*\)/\1/p" /tmp/badging.txt | head -1)
 
 [[ $pkg == "$EXPECT_PACKAGE" ]] || report "package is '$pkg', expected '$EXPECT_PACKAGE'"
