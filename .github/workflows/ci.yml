@@ -405,10 +405,12 @@ jobs:
           } > dist/android/readelf.txt 2>&1
           "$OBJDUMP" -d dist/android/libnvn_host.so > dist/android/objdump-libnvn_host.txt
           ( cd dist/android && sha256sum abi_guest libnvn_host.so run_android.sh > sha256sum.txt )
-          # Keep the tarball inside the guarded directory and exclude itself,
-          # so check_artifact.sh can inspect its members.
-          tar czf dist/android/abi-slice-android.tar.gz \
-            -C dist/android --exclude=abi-slice-android.tar.gz .
+          # Build the tarball outside the directory being archived, then move it
+          # in: writing it in place makes tar report "file changed as we read it".
+          # It lands inside the guarded dir so check_artifact.sh sees its members.
+          TMPTAR=$(mktemp -d)/abi-slice-android.tar.gz
+          tar czf "$TMPTAR" -C dist/android .
+          mv "$TMPTAR" dist/android/abi-slice-android.tar.gz
           ls -l dist/android/abi-slice-android.tar.gz
 
       - name: Build APK shell (aapt2/d8/apksigner, no Gradle)
