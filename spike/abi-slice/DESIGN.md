@@ -34,7 +34,7 @@ spike/abi-slice/
   guest/guest.c            # the five assertions + TLS/x18/FPCR/stack probes
   scripts/run_pc.sh
   scripts/run_android.sh
-  .github/workflows/abi-slice.yml
+  .github/workflows/ci.yml
 ```
 
 ## Slot table (spike subset; v1 says 523)

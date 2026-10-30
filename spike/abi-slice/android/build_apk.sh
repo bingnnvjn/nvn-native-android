@@ -95,22 +95,52 @@ cp "$OUT/lib/arm64-v8a/libabi_slice_jni.so" "$APKROOT/lib/arm64-v8a/"
 echo "==> align + sign"
 "$BT/zipalign" -p -f 4 "$BUILD/unsigned.apk" "$BUILD/aligned.apk"
 
-KS="$BUILD/debug.keystore"
-if [ ! -f "$KS" ]; then
-    keytool -genkeypair -keystore "$KS" -storepass android -keypass android \
-        -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" \
-        -keyalg RSA -keysize 2048 -validity 10000 >/dev/null 2>&1
+# Fixed, PUBLIC artifact key, so consecutive CI runs can update-install over
+# each other. It is not a release key and never will be: docs/PIPELINE.md §4.1.
+REPO=$(cd "$ROOT/../.." && pwd)
+KS=${SIGNING_KEYSTORE:-$REPO/ci/signing/artifact.p12}
+KS_PASS=${SIGNING_KEYSTORE_PASS:-nva-artifact}
+KS_ALIAS=${SIGNING_KEYSTORE_ALIAS:-nva-artifact}
+
+if [ -f "$KS" ]; then
+    SIGN_ARGS=(--ks "$KS" --ks-type PKCS12
+               --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS"
+               --ks-key-alias "$KS_ALIAS")
+    echo "    signing with $KS (artifact key)"
+else
+    echo "    warning: $KS missing; falling back to a throwaway debug key." >&2
+    echo "    warning: update-install across runs will fail." >&2
+    KS="$BUILD/debug.keystore"
+    if [ ! -f "$KS" ]; then
+        keytool -genkeypair -keystore "$KS" -storepass android -keypass android \
+            -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA -keysize 2048 -validity 10000 >/dev/null 2>&1
+    fi
+    SIGN_ARGS=(--ks "$KS" --ks-pass pass:android --key-pass pass:android)
 fi
-"$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+
+# Explicit schemes: with minSdk 26 the tool defaults v1 off, and the adb/OS
+# behaviour we rely on (install-over) only needs v2/v3 — but pinning all three
+# makes the guarantee auditable instead of implied.
+"$BT/apksigner" sign "${SIGN_ARGS[@]}" \
+    --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
     --min-sdk-version 26 --out "$OUT/abi-slice.apk" "$BUILD/aligned.apk"
 "$BT/apksigner" verify --verbose --min-sdk-version 26 "$OUT/abi-slice.apk" \
     > "$OUT/apksigner-verify.txt" 2>&1
+"$BT/apksigner" verify --print-certs "$OUT/abi-slice.apk" \
+    >> "$OUT/apksigner-verify.txt" 2>&1
 cat "$OUT/apksigner-verify.txt"
+for scheme in v1 v2 v3; do
+    grep -q "Verified using $scheme scheme: true" "$OUT/apksigner-verify.txt" \
+        || { echo "error: $scheme signature not verified" >&2; exit 1; }
+done
 
 echo "==> inspect"
 "$BT/aapt2" dump badging "$OUT/abi-slice.apk" > "$OUT/badging.txt" 2>&1 || true
 unzip -l "$OUT/abi-slice.apk" > "$OUT/unzip-l.txt" 2>&1 || true
 grep -E 'package:|launchable-activity:|native-code:' "$OUT/badging.txt" || true
 grep -E 'classes.dex|lib/arm64-v8a' "$OUT/unzip-l.txt" || true
-sha256sum "$OUT/abi-slice.apk" > "$OUT/sha256sum.txt"
+# Relative path on purpose: an absolute path would leak the build host into
+# the artifact (ci/guard/check_artifact.sh rejects that).
+( cd "$OUT" && sha256sum abi-slice.apk > sha256sum.txt )
 ls -lh "$OUT/abi-slice.apk"

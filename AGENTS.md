@@ -9,7 +9,7 @@ Read only what the task needs.
 - Terms: `GLOSSARY.md`
 - Review rules: `CODING_STANDARDS.md`
 - Cheap checks: `spike/abi-slice/scripts/check.sh`
-- CI: `.github/workflows/abi-slice.yml`
+- CI: `.github/workflows/ci.yml`
 - Device: `spike/abi-slice/scripts/run_android.sh`
 - Phone APK: `spike/abi-slice/android/build_apk.sh`
 

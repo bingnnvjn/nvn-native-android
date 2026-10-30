@@ -1,0 +1,6 @@
+# Paths allowed to exceed the 4 MiB size gate or to be binary.
+# One glob per line. Keep this list short and explained — every entry is a
+# decision that this file is not game content (docs/PIPELINE.md §6).
+#
+# Format: shell glob, matched against the repo-relative path.
+# (empty by design; the ABI spike has no large committed blobs)

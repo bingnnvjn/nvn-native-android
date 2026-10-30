@@ -1,38 +1,71 @@
-name: abi-slice
+name: ci
 
-# CI for the #30 ABI vertical slice.
-#   pc-x86_64      — offscreen Vulkan (Mesa lavapipe), full NVN/tests leg.
-#   arm64-linux    — same tests natively on AArch64 with x18 reserved, so the
-#                    AAPCS64/LSE/TLS/thunk contract is exercised without a device.
-#   android-aarch64— cross-build only: libnvn_host.so + abi_guest + run_android.sh
-#                    are uploaded as an artifact. GitHub-hosted CI never runs the
-#                    Android binary; the device leg is scripts/run_android.sh.
+# 单一入口。四条腿 + 一个汇总门：
+#   guard           — 仓库红线（全历史）+ DERIVED 账本 + README 免责段，不编任何东西
+#   pc-x86_64       — lavapipe 上跑全部断言，validation clean
+#   arm64-linux     — AArch64 原生，x18 保留，TLS/gate/stack 契约
+#   android-aarch64 — NDK 交叉 + aapt2/d8/apksigner 出 APK，再跑 APK 门禁
+#   shell-apk       — 产品壳占位（d2r 血统），v0 不启用
 #
-# No secrets are used anywhere in this workflow.
+# 设计依据：docs/PIPELINE.md（#21）。所有 action 用 commit SHA，不用 tag。
 
 on:
-  workflow_dispatch:
   push:
     branches:
+      - main
       - spike/abi-slice
-    paths:
-      - 'spike/abi-slice/**'
-      - '.github/workflows/abi-slice.yml'
+      - arch/l0-l6
+      - ci/pipeline
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
+  # ------------------------------------------------------------------------
+  # 红线门禁：最快、最便宜、PR 上第一个红。扫的是全历史，不是工作树。
+  # ------------------------------------------------------------------------
+  guard:
+    name: guard (repo red lines)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan tree and history
+        run: bash ci/guard/scan_tree.sh
+
+      - name: Check DERIVED ledger
+        run: python3 ci/guard/check_derived_ledger.py
+
+      - name: Check docs (README disclaimer, release-notes template)
+        run: bash ci/guard/check_docs.sh
+
+  # ------------------------------------------------------------------------
+  # PC 回归：Mesa lavapipe，Vulkan 1.4，validation layer 必须真的加载。
+  # ------------------------------------------------------------------------
   pc-x86_64:
     name: pc-x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Install Mesa / Vulkan / glslang
         run: |
@@ -45,7 +78,6 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
-            echo "rustup not found; installing a minimal toolchain"
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --profile minimal
             . "$HOME/.cargo/env"
@@ -56,7 +88,7 @@ jobs:
           cargo --version
           rustc --version
 
-      - name: Build nvn_host (release, default vk feature)
+      - name: Build nvn_host (release)
         working-directory: spike/abi-slice
         run: cargo build --release
 
@@ -76,11 +108,10 @@ jobs:
             done
           fi
           if [ -n "$icd" ]; then
-            echo "lavapipe ICD: $icd"
             echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
             echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
           else
-            echo "::warning::lavapipe ICD JSON not found; falling back to the loader default"
+            echo "::warning::lavapipe ICD JSON not found; falling back to loader default"
           fi
 
       - name: Compile C guest
@@ -92,28 +123,23 @@ jobs:
           cc -std=c11 -O2 -fno-stack-protector -Iinclude guest/guest.c \
             -o dist/pc/abi_guest \
             -Ltarget/release -lnvn_host \
-            -Wl,-rpath,'$ORIGIN' \
-            -ldl -lpthread -lm
+            -Wl,-rpath,'$ORIGIN' -ldl -lpthread -lm
           readelf -h dist/pc/abi_guest | sed -n '1,20p'
 
       - name: Static checks (C layout, slot table, JSON, shell)
         working-directory: spike/abi-slice
         run: bash scripts/check.sh
 
-      - name: Verify lavapipe (vulkaninfo --summary)
+      - name: Verify lavapipe
         working-directory: spike/abi-slice
         run: |
           set -euo pipefail
           mkdir -p dist/pc
-          if ! vulkaninfo --summary > dist/pc/vulkaninfo.txt 2>&1; then
-            cat dist/pc/vulkaninfo.txt
-            echo "::error::vulkaninfo --summary failed"
-            exit 1
-          fi
+          vulkaninfo --summary > dist/pc/vulkaninfo.txt 2>&1
           cat dist/pc/vulkaninfo.txt
           grep -qi 'deviceName' dist/pc/vulkaninfo.txt
 
-      - name: JNI smoke (Linux, same jni.c + guest.c as APK)
+      - name: JNI smoke (Linux)
         working-directory: spike/abi-slice
         run: bash scripts/jni_smoke.sh
 
@@ -122,8 +148,6 @@ jobs:
         run: |
           set -euo pipefail
           ./dist/pc/abi_guest all 2>&1 | tee pc-all.log
-          # The guest exits non-zero on any failed check and always ends with
-          # SUMMARY {"mode":"all","ok":true,...}; assert that summary too.
           grep -q '"ok":true' pc-all.log
 
       - name: Guest — unimplemented (expect SIGABRT / 134)
@@ -134,10 +158,9 @@ jobs:
           rc=$?
           set -e
           cat pc-unimplemented.log
-          echo "abi_guest unimplemented exit code: $rc (expected 134 = SIGABRT)"
           test "$rc" -eq 134
 
-      - name: Collect PC ELF metadata
+      - name: Collect ELF metadata
         if: always()
         working-directory: spike/abi-slice
         run: |
@@ -152,7 +175,7 @@ jobs:
 
       - name: Upload PC artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-pc
           path: |
@@ -161,17 +184,21 @@ jobs:
             spike/abi-slice/dist/pc/
             spike/abi-slice/dist/jni/
           if-no-files-found: warn
+          retention-days: 14
 
-  # Public-repo ARM64 runner. Left as a normal, hard-failing job on purpose: if
-  # the label is unavailable we want a visible red check, not a silently skipped
-  # leg. Do not add continue-on-error here.
+  # ------------------------------------------------------------------------
+  # AArch64 契约：不依赖设备，但用原生设置把 AAPCS64/LSE/TLS/thunk 跑一遍。
+  # 这是正常 job，不是 continue-on-error —— runner 标签不可用就该红。
+  # ------------------------------------------------------------------------
   arm64-linux:
     name: arm64-linux
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Install Mesa / Vulkan / glslang
         run: |
@@ -184,7 +211,6 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
-            echo "rustup not found; installing a minimal toolchain"
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --profile minimal
             . "$HOME/.cargo/env"
@@ -192,10 +218,8 @@ jobs:
           fi
           rustup toolchain install stable --profile minimal
           rustup default stable
-          cargo --version
-          rustc --version
 
-      - name: Build nvn_host (+reserve-x18, release)
+      - name: Build nvn_host (+reserve-x18)
         working-directory: spike/abi-slice
         env:
           RUSTFLAGS: "-C target-feature=+reserve-x18"
@@ -217,11 +241,10 @@ jobs:
             done
           fi
           if [ -n "$icd" ]; then
-            echo "lavapipe ICD: $icd"
             echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
             echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
           else
-            echo "::warning::lavapipe ICD JSON not found; falling back to the loader default"
+            echo "::warning::lavapipe ICD JSON not found; falling back to loader default"
           fi
 
       - name: Compile C guest
@@ -233,43 +256,25 @@ jobs:
           cc -std=c11 -O2 -fno-stack-protector -ffixed-x18 -DNVN_X18_RESERVED=1 -Iinclude guest/guest.c \
             -o dist/arm64/abi_guest \
             -Ltarget/release -lnvn_host \
-            -Wl,-rpath,'$ORIGIN' \
-            -ldl -lpthread -lm
+            -Wl,-rpath,'$ORIGIN' -ldl -lpthread -lm
           readelf -h dist/arm64/abi_guest | sed -n '1,20p'
 
-      - name: Verify lavapipe (vulkaninfo --summary)
+      - name: Verify lavapipe
         working-directory: spike/abi-slice
         run: |
           set -euo pipefail
           mkdir -p dist/arm64
-          if ! vulkaninfo --summary > dist/arm64/vulkaninfo.txt 2>&1; then
-            cat dist/arm64/vulkaninfo.txt
-            echo "::error::vulkaninfo --summary failed"
-            exit 1
-          fi
-          cat dist/arm64/vulkaninfo.txt
+          vulkaninfo --summary > dist/arm64/vulkaninfo.txt 2>&1
           grep -qi 'deviceName' dist/arm64/vulkaninfo.txt
 
-      - name: Guest — all
+      - name: Guest — all / gate / stackgate
         working-directory: spike/abi-slice
         run: |
           set -euo pipefail
-          ./dist/arm64/abi_guest all 2>&1 | tee arm64-all.log
-          grep -q '"ok":true' arm64-all.log
-
-      - name: Guest — gate
-        working-directory: spike/abi-slice
-        run: |
-          set -euo pipefail
-          ./dist/arm64/abi_guest gate 2>&1 | tee arm64-gate.log
-          grep -q '"ok":true' arm64-gate.log
-
-      - name: Guest — stackgate
-        working-directory: spike/abi-slice
-        run: |
-          set -euo pipefail
-          ./dist/arm64/abi_guest stackgate 2>&1 | tee arm64-stackgate.log
-          grep -q '"ok":true' arm64-stackgate.log
+          for mode in all gate stackgate; do
+            ./dist/arm64/abi_guest "$mode" 2>&1 | tee "arm64-$mode.log"
+            grep -q '"ok":true' "arm64-$mode.log"
+          done
 
       - name: Guest — unimplemented (expect SIGABRT / 134)
         working-directory: spike/abi-slice
@@ -278,11 +283,9 @@ jobs:
           ./dist/arm64/abi_guest unimplemented > arm64-unimplemented.log 2>&1
           rc=$?
           set -e
-          cat arm64-unimplemented.log
-          echo "abi_guest unimplemented exit code: $rc (expected 134 = SIGABRT)"
           test "$rc" -eq 134
 
-      - name: Collect arm64 ELF / thunk evidence
+      - name: Collect arm64 evidence
         if: always()
         working-directory: spike/abi-slice
         run: |
@@ -290,38 +293,38 @@ jobs:
           mkdir -p dist/arm64
           uname -a > dist/arm64/uname.txt 2>&1
           cc --version > dist/arm64/cc-version.txt 2>&1
-          readelf -h dist/arm64/abi_guest > dist/arm64/readelf-h-abi_guest.txt 2>&1
           readelf -h dist/arm64/libnvn_host.so > dist/arm64/readelf-h-libnvn_host.txt 2>&1
-          readelf -d dist/arm64/abi_guest > dist/arm64/readelf-d-abi_guest.txt 2>&1
-          ldd dist/arm64/abi_guest > dist/arm64/ldd.txt 2>&1
           objdump -d dist/arm64/libnvn_host.so > dist/arm64/objdump.txt 2>&1
           grep -A4 -E '<nvn_(thunk|gate)_' dist/arm64/objdump.txt \
             > dist/arm64/objdump-thunks-raw.txt 2>&1
           head -200 dist/arm64/objdump-thunks-raw.txt > dist/arm64/objdump-thunks.txt 2>&1
           grep -n 'stadd' dist/arm64/objdump.txt > dist/arm64/stadd.txt 2>&1
-          echo "stadd hits: $(grep -c 'stadd' dist/arm64/objdump.txt)"
           set -e
 
       - name: Upload arm64 artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-arm64
           path: |
-            spike/abi-slice/arm64-all.log
-            spike/abi-slice/arm64-gate.log
-            spike/abi-slice/arm64-stackgate.log
-            spike/abi-slice/arm64-unimplemented.log
+            spike/abi-slice/arm64-*.log
             spike/abi-slice/dist/arm64/
           if-no-files-found: warn
+          retention-days: 14
 
+  # ------------------------------------------------------------------------
+  # Android：交叉编译 + APK。APK 出来后立刻过三道门（内容 / manifest+签名 /
+  # artifact 白名单），任何一道红都不上传。
+  # ------------------------------------------------------------------------
   android-aarch64:
     name: android-aarch64
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Install glslang
         run: |
@@ -332,7 +335,6 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
-            echo "rustup not found; installing a minimal toolchain"
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
               | sh -s -- -y --profile minimal
             . "$HOME/.cargo/env"
@@ -341,30 +343,24 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-linux-android
-          cargo --version
-          rustc --version
 
       - name: Set up Android NDK (r27d)
         id: ndk
-        uses: nttld/setup-ndk@v1
+        uses: nttld/setup-ndk@aacaf74664d0f8e1b070a865acb47ee25007386d # v1.6.0
         with:
           ndk-version: r27d
 
       - name: Configure Android cross toolchain
         env:
-          NDK_PATH_FROM_ACTION: ${{ steps.ndk.outputs.ndk-path }}
+          NDK_PATH_FROM_ACTION: ${{ steps.ndk.outputs['ndk-path'] }}
         run: |
           set -euo pipefail
           NDK="${ANDROID_NDK_HOME:-${NDK_PATH_FROM_ACTION:-}}"
-          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
-            echo "::error::ANDROID_NDK_HOME is unset and setup-ndk gave no ndk-path"
-            exit 1
-          fi
+          test -d "$NDK" || { echo "::error::NDK not found"; exit 1; }
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CC_BIN="$TOOLCHAIN/bin/aarch64-linux-android26-clang"
           AR_BIN="$TOOLCHAIN/bin/llvm-ar"
           test -x "$CC_BIN" || { echo "::error::missing $CC_BIN"; exit 1; }
-          test -x "$AR_BIN" || { echo "::error::missing $AR_BIN"; exit 1; }
           {
             echo "ANDROID_NDK_HOME=$NDK"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_BIN"
@@ -372,9 +368,6 @@ jobs:
             echo "AR_aarch64_linux_android=$AR_BIN"
             echo "ABI_SLICE_NDK_BIN=$TOOLCHAIN/bin"
           } >> "$GITHUB_ENV"
-          echo "NDK:      $NDK"
-          echo "CC:       $CC_BIN"
-          "$CC_BIN" --version
 
       - name: Build nvn_host for aarch64-linux-android
         working-directory: spike/abi-slice
@@ -386,50 +379,37 @@ jobs:
         working-directory: spike/abi-slice
         run: |
           set -euo pipefail
-          NDK_BIN="${ABI_SLICE_NDK_BIN:?ABI_SLICE_NDK_BIN is not set}"
-          CC_BIN="${CC_aarch64_linux_android:-$NDK_BIN/aarch64-linux-android26-clang}"
+          NDK_BIN="${ABI_SLICE_NDK_BIN:?not set}"
+          CC_BIN="${CC_aarch64_linux_android:?not set}"
           READELF="$NDK_BIN/llvm-readelf"
           OBJDUMP="$NDK_BIN/llvm-objdump"
-
           mkdir -p dist/android
           cp target/aarch64-linux-android/release/libnvn_host.so dist/android/
           "$CC_BIN" -std=c11 -O2 -fno-stack-protector -ffixed-x18 -DNVN_X18_RESERVED=1 -Iinclude guest/guest.c \
             -o dist/android/abi_guest \
             -Ltarget/aarch64-linux-android/release -lnvn_host \
-            -Wl,-rpath,'$ORIGIN' \
-            -llog -ldl -lm -fPIE -pie
+            -Wl,-rpath,'$ORIGIN' -llog -ldl -lm -fPIE -pie
           cp scripts/run_android.sh dist/android/
           chmod +x dist/android/run_android.sh
-
           {
             echo "== abi_guest: ELF header =="
             "$READELF" -h dist/android/abi_guest
-            echo
             echo "== libnvn_host.so: ELF header =="
             "$READELF" -h dist/android/libnvn_host.so
-            echo
-            echo "== abi_guest: dynamic section (NEEDED) =="
+            echo "== dynamic sections =="
             "$READELF" -d dist/android/abi_guest
-            echo
-            echo "== libnvn_host.so: dynamic section (NEEDED) =="
             "$READELF" -d dist/android/libnvn_host.so
-            echo
-            echo "== symbols: nvnBootstrapLoader / nva_nvn_resolve =="
+            echo "== resolved symbols =="
             "$READELF" --dyn-syms --wide dist/android/libnvn_host.so \
               | grep -E 'nvnBootstrapLoader|nva_nvn_resolve' || true
-            echo "---- guest imports ----"
-            "$READELF" --dyn-syms --wide dist/android/abi_guest \
-              | grep -E 'nvnBootstrapLoader|nva_nvn_resolve' || true
           } > dist/android/readelf.txt 2>&1
-
           "$OBJDUMP" -d dist/android/libnvn_host.so > dist/android/objdump-libnvn_host.txt
-          grep -A4 -E '<nvn_(thunk|gate)_' dist/android/objdump-libnvn_host.txt \
-            > dist/android/objdump-thunks-raw.txt || true
-          head -200 dist/android/objdump-thunks-raw.txt > dist/android/objdump-thunks.txt
-
           ( cd dist/android && sha256sum abi_guest libnvn_host.so run_android.sh > sha256sum.txt )
-          tar czf abi-slice-android.tar.gz -C dist/android .
-          ls -l abi-slice-android.tar.gz dist/android
+          # Keep the tarball inside the guarded directory and exclude itself,
+          # so check_artifact.sh can inspect its members.
+          tar czf dist/android/abi-slice-android.tar.gz \
+            -C dist/android --exclude=abi-slice-android.tar.gz .
+          ls -l dist/android/abi-slice-android.tar.gz
 
       - name: Build APK shell (aapt2/d8/apksigner, no Gradle)
         working-directory: spike/abi-slice
@@ -437,18 +417,162 @@ jobs:
           TARGET_DIR: target/aarch64-linux-android/release
         run: bash android/build_apk.sh
 
-      - name: Upload Android artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: abi-slice-android
-          path: |
-            spike/abi-slice/abi-slice-android.tar.gz
-            spike/abi-slice/dist/android/
-          if-no-files-found: error
+      - name: Guard — APK has no game content
+        run: bash ci/guard/scan_apk.sh spike/abi-slice/dist/android-apk/abi-slice.apk
+
+      - name: Guard — manifest + signing certificate
+        env:
+          GUARD_MODE: artifact
+        run: bash ci/guard/check_manifest.sh spike/abi-slice/dist/android-apk/abi-slice.apk
+
+      - name: Guard — artifact whitelist
+        run: |
+          rm -rf spike/abi-slice/dist/android-apk/build
+          bash ci/guard/check_artifact.sh spike/abi-slice/dist/android-apk abi-slice-apk
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-apk
           path: spike/abi-slice/dist/android-apk/
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Guard — evidence artifact contract
+        if: always()
+        run: bash ci/guard/check_artifact.sh spike/abi-slice/dist/android abi-slice-evidence evidence
+
+      - name: Upload Android evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: abi-slice-evidence
+          path: spike/abi-slice/dist/android/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ------------------------------------------------------------------------
+  # 产品壳占位：d2r 血统，需要 ci/dmgendir 替身（#15）。替身未入库前不启用。
+  # ------------------------------------------------------------------------
+  shell-apk:
+    name: shell-apk (reserved)
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Pin SDK / NDK / CMake (same exact packages as dm/android/docker/Dockerfile)
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" \
+            "platforms;android-36" "build-tools;36.0.0" \
+            "ndk;29.0.14206865" "cmake;3.31.6"
+          {
+            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865"
+            echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/29.0.14206865"
+          } >> "$GITHUB_ENV"
+
+      - name: Build game-free shell APK
+        run: |
+          set -euo pipefail
+          # DM_ANDROID_CHECKS must stay OFF: with it ON, android/CMakeLists.txt
+          # returns at lines 15-19 and never links libdm.so (issue #15 finding).
+          gradle --no-daemon -p dm/android :app:assembleDebug :app:lintDebug \
+            -PdmGenDir=ci/dmgendir -PdmPython=$(command -v python3) \
+            -DDM_ANDROID_CHECKS=OFF
+
+      - name: Guard — APK has no game content
+        run: bash ci/guard/scan_apk.sh dm/android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Guard — product manifest + release certificate
+        env:
+          GUARD_MODE: product
+          GUARD_PACKAGE: com.bingnnvjn.nva
+        run: bash ci/guard/check_manifest.sh dm/android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Guard — L6 packaging assertions
+        run: |
+          set -euo pipefail
+          APK=dm/android/app/build/outputs/apk/debug/app-debug.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/aapt2" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
+          # 16 KiB page alignment and JNI_OnLoad are ARCH §3.7 CI assertions.
+          # Kept next to the build so they cannot drift into the device job.
+
+      - name: Upload shell APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: shell-apk
+          path: dm/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+  # ------------------------------------------------------------------------
+  # 工具占位：nva-pack / nva-rewrite 的合成 fixture 测试。产品树未入库前不启用。
+  # ------------------------------------------------------------------------
+  tools:
+    name: tools (reserved)
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Synthetic fixtures only — no --xci, no --keys
+        run: |
+          set -euo pipefail
+          cargo test -p nva-pack -p nva-rewrite
+          nva-verify rewrite --fixture ci/fixtures/rewrite-min
+          nva-verify loadplan --fixture ci/fixtures/pack-min
+          nva-pack verify ci/fixtures/pack-min
+
+  # ------------------------------------------------------------------------
+  # 汇总门：分支保护只需要这一个必需检查。
+  # 启用 shell-apk / tools 时，必须把它们的 job id 加进 needs，否则启用后仍绿。
+  # ------------------------------------------------------------------------
+  gate:
+    name: gate
+    if: always()
+    needs: [guard, pc-x86_64, arm64-linux, android-aarch64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every leg green
+        env:
+          R_GUARD: ${{ needs.guard.result }}
+          R_PC: ${{ needs['pc-x86_64'].result }}
+          R_ARM: ${{ needs['arm64-linux'].result }}
+          R_AND: ${{ needs['android-aarch64'].result }}
+        run: |
+          set -euo pipefail
+          echo "guard=$R_GUARD pc=$R_PC arm64=$R_ARM android=$R_AND"
+          for r in "$R_GUARD" "$R_PC" "$R_ARM" "$R_AND"; do
+            if [ "$r" != "success" ]; then
+              echo "::error::a CI leg did not succeed ($r)"
+              exit 1
+            fi
+          done
