@@ -64,9 +64,15 @@ public class MainActivity extends Activity {
 
         setContentView(root);
 
-        all.setOnClickListener(v -> runMode("all", false));
-        gate.setOnClickListener(v -> runMode("gate", false));
-        abort.setOnClickListener(v -> runMode("unimplemented", true));
+        all.setOnClickListener(new android.view.View.OnClickListener() {
+            @Override public void onClick(android.view.View v) { runMode("all", false); }
+        });
+        gate.setOnClickListener(new android.view.View.OnClickListener() {
+            @Override public void onClick(android.view.View v) { runMode("gate", false); }
+        });
+        abort.setOnClickListener(new android.view.View.OnClickListener() {
+            @Override public void onClick(android.view.View v) { runMode("unimplemented", true); }
+        });
 
         /* Phone-only path: run the five assertions as soon as the app opens. */
         runMode("all", false);
@@ -74,19 +80,23 @@ public class MainActivity extends Activity {
 
     private void runMode(String mode, boolean abort) {
         output.setText("Running " + mode + " ...");
-        new Thread(() -> {
-            String text;
-            try {
-                String cache = getCacheDir().getAbsolutePath();
-                text = abort ? runAbort(cache) : runNative(mode, cache);
-            } catch (Throwable t) {
-                text = "native call failed:\n" + Log.getStackTraceString(t);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String text;
+                try {
+                    String cache = getCacheDir().getAbsolutePath();
+                    text = abort ? runAbort(cache) : runNative(mode, cache);
+                } catch (Throwable t) {
+                    text = "native call failed:\n" + Log.getStackTraceString(t);
+                }
+                for (String line : text.split("\n")) {
+                    Log.i("abi-slice", line);
+                }
+                final String shown = text;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { output.setText(shown); }
+                });
             }
-            for (String line : text.split("\n")) {
-                Log.i("abi-slice", line);
-            }
-            final String shown = text;
-            runOnUiThread(() -> output.setText(shown));
         }, "abi-slice").start();
     }
 }
