@@ -16,8 +16,8 @@ report() { printf 'ARTIFACT-RED-LINE: %s\n' "$*" >&2; fail=1; }
 
 # Intermediates from build_apk.sh (apkroot/, classes, dex, aligned/unsigned)
 # must not ride along.
-for d in build apkroot classes dex; do
-  [[ -e $DIR/$d ]] && report "build intermediate present: $d/ (prune it before upload)"
+for d in build apkroot classes dex lib; do
+  [[ -e $DIR/$d ]] && report "build intermediate present: $d/ (prune it, or upload explicit files)"
 done
 
 # Key material must never leave the runner. The published artifact key is
