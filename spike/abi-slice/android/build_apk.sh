@@ -138,7 +138,9 @@ done
 
 echo "==> inspect"
 "$BT/aapt2" dump badging "$OUT/abi-slice.apk" > "$OUT/badging.txt" 2>&1 || true
-unzip -l "$OUT/abi-slice.apk" > "$OUT/unzip-l.txt" 2>&1 || true
+# Relative paths on purpose: `unzip -l` echoes the argument it was given, and
+# an absolute one would leak the build host into the artifact.
+( cd "$OUT" && unzip -l abi-slice.apk > unzip-l.txt 2>&1 ) || true
 grep -E 'package:|launchable-activity:|native-code:' "$OUT/badging.txt" || true
 grep -E 'classes.dex|lib/arm64-v8a' "$OUT/unzip-l.txt" || true
 # Relative path on purpose: an absolute path would leak the build host into
