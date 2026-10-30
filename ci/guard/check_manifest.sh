@@ -27,10 +27,12 @@ EXPECT_TARGET=${GUARD_TARGET_SDK:-34}
 "$BT/aapt2" dump badging "$APK" > /tmp/badging.txt 2>&1 || {
   echo "guard: aapt2 dump badging failed" >&2; exit 2; }
 
-pkg=$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" /tmp/badging.txt)
-min=$(sed -n "s/^sdkVersion:'\([0-9]*\)'.*/\1/p" /tmp/badging.txt)
-tgt=$(sed -n "s/^targetSdkVersion:'\([0-9]*\)'.*/\1/p" /tmp/badging.txt)
-nat=$(sed -n "s/^native-code: \(.*\)/\1/p" /tmp/badging.txt)
+# aapt2's badging output is stable but not always flush-left, and the field
+# names differ across build-tools versions; match the field anywhere on a line.
+pkg=$(sed -n "s/.*package: name='\([^']*\)'.*/\1/p" /tmp/badging.txt | head -1)
+min=$(sed -n "s/.*sdkVersion:'\([0-9]*\)'.*/\1/p" /tmp/badging.txt | head -1)
+tgt=$(sed -n "s/.*targetSdkVersion:'\([0-9]*\)'.*/\1/p" /tmp/badging.txt | head -1)
+nat=$(sed -n "s/.*native-code: \(.*\)/\1/p" /tmp/badging.txt | head -1)
 
 [[ $pkg == "$EXPECT_PACKAGE" ]] || report "package is '$pkg', expected '$EXPECT_PACKAGE'"
 [[ $min == "$EXPECT_MIN" ]] || report "minSdk is '$min', expected '$EXPECT_MIN'"
@@ -101,6 +103,8 @@ esac
 
 if ((fail)); then
   echo "guard: manifest/certificate FAILED (docs/PIPELINE.md §4)." >&2
+  echo "--- badging ---" >&2
+  cat /tmp/badging.txt >&2
   exit 1
 fi
 echo "guard: manifest and certificate OK ($pkg, $MODE, ${digest:0:16}…)"
