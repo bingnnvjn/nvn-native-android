@@ -132,7 +132,7 @@ fi
     >> "$OUT/apksigner-verify.txt" 2>&1
 cat "$OUT/apksigner-verify.txt"
 for scheme in v2 v3; do
-    grep -q "Verified using $scheme scheme: true" "$OUT/apksigner-verify.txt" \
+    grep -q "Verified using $scheme scheme.*: true" "$OUT/apksigner-verify.txt" \
         || { echo "error: $scheme signature not verified" >&2; exit 1; }
 done
 
