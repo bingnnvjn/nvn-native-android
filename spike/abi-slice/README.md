@@ -38,6 +38,15 @@ tar xzf abi-slice-android.tar.gz -C dist/android
 spike/abi-slice/scripts/run_android.sh        # uses adb; no root
 ```
 
+Phone-only APK (no adb, no Termux):
+
+- Artifact `abi-slice-apk` (`abi-slice.apk`, arm64-v8a, debug-signed v2/v3).
+- Install it, enable "install unknown apps" for the file manager/browser.
+- Open **ABI Slice**. It runs `all` automatically.
+- Buttons: `Run all`, `Run gate`, `Abort test`.
+- The result is on the screen and in logcat with tag `abi-slice`.
+- The APK is a JNI shell around the same `guest.c`; it does not change the C ABI.
+
 Local Linux smoke (needs glslang-tools + lavapipe):
 
 ```sh

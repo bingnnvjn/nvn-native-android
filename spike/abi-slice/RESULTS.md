@@ -1,16 +1,17 @@
 # #30 ABI vertical slice — results
 
-CI run: https://github.com/bingnnvjn/nvn-native-android/actions/runs/40169777912
-Branch: `spike/abi-slice` (head `cf3ba662a8b14c24f4870911fdc29e7ed82514cb`)
+CI run: https://github.com/bingnnvjn/nvn-native-android/actions/runs/41067076837
+Branch: `spike/abi-slice` (head `699725727f82ea37aa4cbec52f237f57a6a9569a`)
 Artifacts: `abi-slice-pc`, `abi-slice-arm64`, `abi-slice-android`.
 
 ## Verdict
 
 - **PC x86_64: 5/5 PASS** (Mesa lavapipe, Vulkan 1.4.318, validation layer clean).
 - **AArch64 Linux: 5/5 PASS + all probes PASS** (lavapipe arm64, validation clean).
-- **Android AArch64: cross-build PASS**; the device leg is not executed here:
-  this session has no usable device (`adb` starts, `adb devices` is empty; no
-  `/dev/bus/usb`). The artifact and `scripts/run_android.sh` are ready.
+- **Android AArch64: cross-build PASS + APK PASS**; the device leg is not
+  executed here: this session has no usable device (`adb` starts, `adb devices`
+  is empty; no `/dev/bus/usb`). Two delivery forms are ready:
+  `abi-slice-android` (adb) and `abi-slice-apk` (install + tap).
 - **C ABI v1 is directionally right, but needs four P0 additions** (TLS/thunk
   contract, signature metadata, fatal channel, bootstrap entry); see below.
 
@@ -173,6 +174,23 @@ loader whether a name was found or which thunk shape it got.
 - `NVNboolean` is 8-bit; typed stubs zero w0, callers ignore upper bits.
 - `stadd` needs ARMv8.1-LSE; the Redmi 725 supports it. Add a `LSE/LLSC` table
   flag and an `ldxr/stxr` fallback for older devices.
+
+## Phone-only APK
+
+The `abi-slice-apk` artifact is a minimal Android shell around the same
+`guest.c`:
+
+- arm64-v8a, `minSdk 26`, `targetSdk 34`, debug-signed (APK signature v2/v3).
+- `System.loadLibrary("nvn_host")` then `abi_slice_jni`; JNI redirects
+  stdout/stderr to a cache file and returns the log to Java.
+- On launch it runs `all` automatically. Buttons run `gate` and a child-process
+  `unimplemented` abort test. The output is on the screen and in logcat
+  (`tag=abi-slice`).
+- A Linux JNI smoke (same `jni.c` + `guest.c`, x86_64 JDK + lavapipe) passed
+  `all` 5/5, `gate` 5/5, and `abort` with child SIGABRT=6.
+
+The APK is not a full app. It has no icon, no resources, and no UI beyond the
+test. It does not change the C ABI.
 
 ## Not covered / next
 
