@@ -20,6 +20,7 @@ raw = subprocess.run(
 
 calls = []
 bash_heads = collections.Counter()
+bash_rg = 0
 for line in raw.splitlines():
     try:
         event = json.loads(line)
@@ -36,13 +37,17 @@ for line in raw.splitlines():
         except json.JSONDecodeError:
             args = {}
         cmd = args.get("command") or ""
-        for head in re.findall(r"(?:^|&&|;)\s*(cat|grep|find|sed|head|tail|rg|wc)\b", cmd):
+        # rg is the allowed bash fallback for search; it is not inspection-shaped.
+        for head in re.findall(r"(?:^|&&|;)\s*(cat|grep|find|sed|head|tail|wc)\b", cmd):
             bash_heads[head] += 1
+        bash_rg += len(re.findall(r"(?:^|&&|;)\s*rg\b", cmd))
 
 counts = collections.Counter(calls)
 print("tool calls:", len(calls))
 for name in ("bash", "read", "glob", "grep", "write", "edit"):
     print(f"  {name}: {counts.get(name, 0)}")
-print("inspection-shaped bash commands:", sum(bash_heads.values()))
+print("inspection-shaped bash (cat/grep/find/sed/head/tail/wc):",
+      sum(bash_heads.values()))
 for head, n in bash_heads.most_common():
     print(f"  {head}: {n}")
+print("allowed bash rg fallback:", bash_rg)
