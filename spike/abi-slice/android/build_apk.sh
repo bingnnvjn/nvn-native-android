@@ -38,6 +38,7 @@ fi
 
 TARGET_DIR=${TARGET_DIR:-target/aarch64-linux-android/release}
 OUT=${OUT:-dist/android-apk}
+OUT=$(realpath -m "$OUT")
 BUILD="$OUT/build"
 APKROOT="$BUILD/apkroot"
 
