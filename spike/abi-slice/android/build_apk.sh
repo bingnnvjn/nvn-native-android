@@ -119,18 +119,19 @@ else
     SIGN_ARGS=(--ks "$KS" --ks-pass pass:android --key-pass pass:android)
 fi
 
-# Explicit schemes: with minSdk 26 the tool defaults v1 off, and the adb/OS
-# behaviour we rely on (install-over) only needs v2/v3 — but pinning all three
-# makes the guarantee auditable instead of implied.
+# v2/v3 only. v1 (JAR signing) is a no-op at minSdk 26: even with
+# --v1-signing-enabled true the tool emits no v1 signature and verify reports
+# "v1 scheme: false" (measured in run 41089559337). Pinning a scheme that
+# cannot exist would make the gate lie.
 "$BT/apksigner" sign "${SIGN_ARGS[@]}" \
-    --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+    --v2-signing-enabled true --v3-signing-enabled true \
     --min-sdk-version 26 --out "$OUT/abi-slice.apk" "$BUILD/aligned.apk"
 "$BT/apksigner" verify --verbose --min-sdk-version 26 "$OUT/abi-slice.apk" \
     > "$OUT/apksigner-verify.txt" 2>&1
 "$BT/apksigner" verify --print-certs "$OUT/abi-slice.apk" \
     >> "$OUT/apksigner-verify.txt" 2>&1
 cat "$OUT/apksigner-verify.txt"
-for scheme in v1 v2 v3; do
+for scheme in v2 v3; do
     grep -q "Verified using $scheme scheme: true" "$OUT/apksigner-verify.txt" \
         || { echo "error: $scheme signature not verified" >&2; exit 1; }
 done

@@ -69,10 +69,22 @@ case $MODE in
 esac
 
 # --- signing certificate ----------------------------------------------------
+"$BT/apksigner" verify -v "$APK" > /tmp/verify.txt 2>&1 || {
+  echo "guard: apksigner verify failed" >&2; cat /tmp/verify.txt >&2; exit 1; }
 "$BT/apksigner" verify --print-certs "$APK" > /tmp/certs.txt 2>&1 || {
-  echo "guard: apksigner verify failed" >&2; cat /tmp/certs.txt >&2; exit 1; }
+  echo "guard: apksigner --print-certs failed" >&2; cat /tmp/certs.txt >&2; exit 1; }
 
-digest=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/certs.txt | head -1 | tr 'A-F' 'a-f')
+# minSdk 26 produces v2+v3; v1 cannot exist and must not be asserted.
+for scheme in v2 v3; do
+  grep -q "Verified using $scheme scheme" /tmp/verify.txt \
+    || report "no $scheme signature"
+  grep -q "Verified using $scheme scheme.*: true" /tmp/verify.txt \
+    || report "$scheme signature did not verify"
+done
+
+# The digest line is emitted per signer version ("V3.0 Signer: certificate
+# SHA-256 digest: ..." on newer build-tools), so match the suffix only.
+digest=$(sed -n 's/.*certificate SHA-256 digest: //p' /tmp/certs.txt | head -1 | tr 'A-F' 'a-f')
 [[ -n $digest ]] || { echo "guard: no signer digest" >&2; exit 1; }
 
 pinned_file="$ROOT/ci/signing/fingerprint.txt"

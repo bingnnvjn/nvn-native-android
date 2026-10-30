@@ -62,9 +62,9 @@
 
 - 文件：`ci/signing/artifact.p12`（PKCS12，RSA 2048，`CN=NVA Artifact, O=nvn-native-android`，10000 天）。
 - 密码：`nva-artifact`（写在 workflow 里；它不是秘密，见下）。
-- 算法：`apksigner` **显式** `--v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true`。不依赖默认值——minSdk 26 时 v1 默认关闭，官方只承诺「按 min/max SDK 决定」。不开 v4：v4 要额外的 `.apk.idsig`，单文件分发会被这件事拖住。
+- 算法：`apksigner` **显式** `--v2-signing-enabled true --v3-signing-enabled true`。**v1 是 no-op**：minSdk 26 下即使写 `--v1-signing-enabled true`，工具也不产出 v1 签名，`verify` 报 `v1 scheme: false`（run 41089559337 实测）。不开 v4：v4 要额外的 `.apk.idsig`，单文件分发会被这件事拖住。
 - 指纹钉死：`ci/signing/fingerprint.txt` 存**证书** SHA-256（`openssl x509 -outform der | sha256sum`），与 `apksigner verify --print-certs` 的 `Signer #1 certificate SHA-256 digest` 同值；`check_manifest.sh` 每次比对。
-- 校验：`apksigner verify -v` 输出里 `Verified using v1/v2/v3 scheme: true` 三条都要在。
+- 校验：`apksigner verify -v` 输出里 `v2` / `v3` 两条必须是 `true`；v1 不检查（见上）。
 
 **它是公开的，这是刻意的。** 它只解决一件事：不同 CI run 出来的 APK 能互相覆盖安装。它不是信任锚——任何人都能用同一把私钥签一个包。所以：
 
@@ -84,7 +84,7 @@
 | `native-code` | 只有 `arm64-v8a` | 同上 |
 | 权限 | spike 0 个；产品按 L6 白名单（SAF/FGS），逐条审 | 同上 |
 | `debuggable` | spike `true`；产品 `false` | 同上（按 `mode`） |
-| 签名 scheme | v1+v2+v3 三条 `true` | `check_manifest.sh` |
+| 签名 scheme | v2+v3 两条 `true`（v1 在 minSdk 26 下不存在） | `check_manifest.sh` |
 | 体积 | ≤ 32 MB | `scan_apk.sh` |
 
 产品壳真正启用时，`check_manifest.sh` 需要 `GUARD_MODE=product`：包名、targetSdk、权限白名单、`debuggable=false` 四项都变。**现在的脚本只覆盖 spike，产品模式在 `shell-apk` 启用时补**——不写「已经支持」，避免又是一个「声明在、门禁不在」。
