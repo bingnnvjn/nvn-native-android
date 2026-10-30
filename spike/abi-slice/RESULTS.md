@@ -8,22 +8,22 @@ Artifacts: `abi-slice-pc`, `abi-slice-arm64`, `abi-slice-android`.
 
 - **PC x86_64: 5/5 PASS** (Mesa lavapipe, Vulkan 1.4.318, validation layer clean).
 - **AArch64 Linux: 5/5 PASS + all probes PASS** (lavapipe arm64, validation clean).
-- **Android AArch64: cross-build PASS + APK PASS**; the device leg is not
-  executed here: this session has no usable device (`adb` starts, `adb devices`
-  is empty; no `/dev/bus/usb`). Two delivery forms are ready:
-  `abi-slice-android` (adb) and `abi-slice-apk` (install + tap).
+- **Android AArch64: cross-build PASS + APK PASS + real device PASS**.
+  Redmi Note 12 Turbo (`23049RAD8C`, Android 15, Adreno 725, Vulkan 1.1.128):
+  `all` 9/9 assertions, `gate` 10/10, `abort` child SIGABRT=6. The APK is the
+  delivery form that was installed on the phone.
 - **C ABI v1 is directionally right, but needs four P0 additions** (TLS/thunk
   contract, signature metadata, fatal channel, bootstrap entry); see below.
 
 ## Five assertions
 
-| assertion | x86_64 PC | AArch64 Linux | Android build |
+| assertion | x86_64 PC | AArch64 Linux | Adreno 725 |
 |---|---|---|---|
-| name_lookup | PASS | PASS | built |
-| state_setter | PASS | PASS | built |
-| draw_vulkan | PASS, validation clean | PASS, validation clean | built, not run |
-| returns (float/pointer) | PASS | PASS | built |
-| unimplemented_typed | PASS, abort=134 | PASS, abort=134 | built |
+| name_lookup | PASS | PASS | PASS |
+| state_setter | PASS | PASS | PASS |
+| draw_vulkan | PASS, validation clean | PASS, validation clean | PASS, validation layer unavailable |
+| returns (float/pointer) | PASS | PASS | PASS |
+| unimplemented_typed | PASS, abort=134 | PASS, abort=134 | PASS, abort=SIGABRT 6 |
 
 Exact log lines (trimmed):
 
@@ -175,6 +175,25 @@ loader whether a name was found or which thunk shape it got.
 - `stadd` needs ARMv8.1-LSE; the Redmi 725 supports it. Add a `LSE/LLSC` table
   flag and an `ldxr/stxr` fallback for older devices.
 
+## Adreno 725 real device (2026-10-30)
+
+Device from the APK screen: `23049RAD8C / Android 15`, `arm64-v8a`.
+Vulkan: `Adreno (TM) 725`, `vulkan 1.1.128`, `validation=false` (no layer).
+
+- `all`: 9 assertions, 0 failed checks; the five required assertions are
+  `name_lookup`, `state_setter`, `draw_vulkan` (pixel `0xff00ff00`),
+  `returns`, `unimplemented_typed`.
+- `gate`: 10 assertions, 0 failed checks, `tls_gate:1`.
+  `tls_gate` probe = host TLS; guest TLS restored after return.
+- `abort`: child process `SIGABRT=6`; the app process stayed alive.
+- `tls_direct_hazard`: expected informational proof that direct thunk sees
+  guest TPIDR_EL0 when it is installed.
+- `x18` sentinel, `fpcr` RMode, `stack_args_direct` (sum 55) all pass.
+- No app crash; only the intended child abort.
+
+Screenshots: [all](evidence/device-all.png), [gate](evidence/device-gate.png),
+[abort](evidence/device-abort.png).
+
 ## Phone-only APK
 
 The `abi-slice-apk` artifact is a minimal Android shell around the same
@@ -194,10 +213,11 @@ test. It does not change the C ABI.
 
 ## Not covered / next
 
-- Real Adreno 725: run `scripts/run_android.sh` from a machine with adb and the
-  device attached. This session could not (no device).
-- Android validation layer: not packaged; only the two Linux lavapipe runs have
-  clean validation.
+- Android validation layer: not packaged; the Adreno 725 run has
+  `validation_available:0`, so driver-level validation is not verified. The two
+  Linux lavapipe runs are validation-clean.
+- The phone run used the APK/JNI path; the `adb` executable path
+  (`scripts/run_android.sh`) is built but was not used on this device.
 - Full 523-slot table: the spike has 14 slots; the table shape is validated,
   not full coverage.
 - Multi-thread TLS, LSE fallback, device-lost, and 8 MRT/present remain out of

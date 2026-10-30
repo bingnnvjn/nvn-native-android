@@ -16,7 +16,7 @@ find where the C ABI v1 contract breaks, not to build an engine.
 |---|---|---|---|
 | PC x86_64 | `ubuntu-24.04` | Mesa lavapipe | table/name lookup, state setter, clear+draw+fence+readback, float/pointer returns, typed stub, abort |
 | AArch64 Linux | `ubuntu-24.04-arm` | lavapipe arm64 | same five + LSE thunk, TLS direct/gate, x18 (`+reserve-x18`), FPCR, stack args, struct returns |
-| Android AArch64 | cross-build only | Adreno 725 at run time | the real-device leg: `adb push` the artifact, run `run_android.sh` |
+| Android AArch64 | CI cross-build + APK | Adreno 725 | APK installed on the phone: all 9/9, gate 10/10, abort SIGABRT |
 
 No 8 MRT, no block-linear, no present, no BotW. Builds are all in CI; the
 device leg is only `adb`.
@@ -46,6 +46,8 @@ Phone-only APK (no adb, no Termux):
 - Buttons: `Run all`, `Run gate`, `Abort test`.
 - The result is on the screen and in logcat with tag `abi-slice`.
 - The APK is a JNI shell around the same `guest.c`; it does not change the C ABI.
+- Verified on Redmi Note 12 Turbo (`23049RAD8C`, Android 15, Adreno 725,
+  Vulkan 1.1.128): `all` 9/9, `gate` 10/10, `abort` SIGABRT=6.
 
 Local Linux smoke (needs glslang-tools + lavapipe):
 
