@@ -241,9 +241,11 @@ message; driver messages are logged as `[vk driver msg]` and never increment
 `validation_errors`. Any real VUID from the layer still fails the assertion,
 so this does not hide layer findings.
 
-Reproduce: build the APK with the layer `.so` in `lib/arm64-v8a`, install it,
-set the four `gpu_debug_*` settings above, then launch the app and press
-`RUN GATE`.
+Reproduce: `VVL_VERSION=1.4.350.0 bash android/build_apk.sh`. The script
+downloads the archive, checks its pinned SHA-256, and bundles the arm64 `.so`.
+Then install the APK, set the four `gpu_debug_*` settings above, launch the app
+and press `RUN GATE`. `VVL_ARCHIVE=<tarball>` skips the download; an empty
+`VVL_VERSION` keeps the layer out of the APK.
 
 ## Phone-only APK
 
