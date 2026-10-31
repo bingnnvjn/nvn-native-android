@@ -14,6 +14,7 @@ copy `work/` content into tracked files.
 - Terms: `GLOSSARY.md`
 - Review rules: `CODING_STANDARDS.md`
 - Cheap checks: `spike/abi-slice/scripts/check.sh`
+- Local build recipe (本机路径，仅本机有效): `../work/build-local.md`
 - CI: `.github/workflows/ci.yml`
 - Device: `spike/abi-slice/scripts/run_android.sh`
 - Phone APK: `spike/abi-slice/android/build_apk.sh`
@@ -28,10 +29,26 @@ Tool use:
   `rg pattern`, `rg --files -g '*.rs'`. Do not use `cat`, `find`, `grep`,
   `sed`, `head`, or `tail` for inspection.
 
-Long sessions can be audited with
-`spike/abi-slice/scripts/audit_tool_use.py <session.v4.jsonl.zstd>`.
+Before closing a session, audit it with
+`spike/abi-slice/scripts/audit_tool_use.py --latest` (add `--strict` to fail on
+inspection-shaped bash).
 
 ## ABI change
 
-Read `CODING_STANDARDS.md` before you change `include/nva_abi.h`,
-`src/lib.rs` slot names, or `nvn-table.json`.
+Read `CODING_STANDARDS.md` before you change the product `include/nva_abi.h`,
+the spike `spike/abi-slice/include/nva_abi_spike.h`, `src/lib.rs` slot names,
+or `nvn-table.json`.
+
+## Agent skills
+
+### Issue tracker
+
+issue 和 spec 都走 GitHub Issues（`gh` CLI）。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+五个 triage 角色用中文标签。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单 context 布局：根目录 `GLOSSARY.md` + `docs/adr/`。见 `docs/agents/domain.md`。
