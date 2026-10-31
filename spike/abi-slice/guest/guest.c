@@ -241,6 +241,7 @@ static void emit_summary(const char *mode)
 {
     uint32_t tls_gate = 0;
     uint32_t validation = 0;
+    uint32_t validation_errors = 0;
 
     if (g_gfx) {
         nva_spike_state st;
@@ -250,14 +251,17 @@ static void emit_summary(const char *mode)
         if (nva_spike_get_state(g_gfx, &st) == NVA_OK) {
             tls_gate = st.tls_gate;
             validation = st.validation_available;
+            validation_errors = st.validation_errors;
         }
     }
 
     printf("SUMMARY {\"mode\":\"%s\",\"ok\":%s,\"assertions\":%d,"
            "\"failed_assertions\":%d,\"failed_checks\":%d,"
-           "\"tls_gate\":%" PRIu32 ",\"validation_available\":%" PRIu32 "}\n",
+           "\"tls_gate\":%" PRIu32 ",\"validation_available\":%" PRIu32 ","
+           "\"validation_errors\":%" PRIu32 "}\n",
            mode, g_failures == 0 ? "true" : "false", g_result_count,
-           g_failed_assertions, g_failures, tls_gate, validation);
+           g_failed_assertions, g_failures, tls_gate, validation,
+           validation_errors);
     fflush(stdout);
 }
 

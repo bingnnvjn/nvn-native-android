@@ -224,11 +224,13 @@ Result:
 I vulkan   : Loaded layer VK_LAYER_KHRONOS_validation
 I abi-slice: Vulkan device: Adreno (TM) 725 (vulkan 1.1.128) validation=true
 I abi-slice: submit: serial=1 draw=(0,3) clear=[1.00,0.00,0.00,1.00] pixel=0xff00ff00 vk_errors=0
-I abi-slice: SUMMARY {"mode":"all","ok":true,"assertions":9,"failed_assertions":0,"failed_checks":0,"tls_gate":0,"validation_available":1}
-I abi-slice: SUMMARY {"mode":"gate","ok":true,"assertions":10,"failed_assertions":0,"failed_checks":0,"tls_gate":1,"validation_available":1}
+I abi-slice: SUMMARY {"mode":"all","ok":true,"assertions":9,"failed_assertions":0,"failed_checks":0,"tls_gate":0,"validation_available":1,"validation_errors":0}
+I abi-slice: SUMMARY {"mode":"gate","ok":true,"assertions":10,"failed_assertions":0,"failed_checks":0,"tls_gate":1,"validation_available":1,"validation_errors":0}
 ```
 
-`logcat` has no `VUID-` and no `Validation Error` line for either run.
+`logcat` has no `VUID-` and no `Validation Error` line for either run. `SUMMARY`
+now prints `validation_errors` directly (`guest.c`), so a gate can read it
+instead of scraping the `draw_vulkan` detail string.
 
 Driver message caveat: the Adreno driver also emits `VKDBGUTILWARN003`
 ("render pass is not qualified for multipass") through `VK_EXT_debug_utils`,
