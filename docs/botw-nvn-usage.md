@@ -1,11 +1,11 @@
 # BotW 1.6.0 的 NVN 使用面（静态可得部分）
 
-> 方法：ExeFS 提取 + NSO 符号表 + `shader_list.tsv` 依赖解析。
+> 方法：ExeFS 提取（密钥只在本机传入，不记录路径）+ NSO 符号表 + `shader_list.tsv` 依赖解析。
 > 结论分「已确定」「高置信推断」「仍然未知」三档。
 
 ## 1. ExeFS 已提取并校验
 
-`games/botw/scripts/extract_exefs.py --keys prod.keys` 从卡带的 secure 分区提取，哈希与 `expected-v1.6.0.json` 一致：
+ExeFS 从卡带的 secure 分区提取（密钥只在本机传入），哈希与 `expected-v1.6.0.json` 一致：
 
 | 模块 | 大小 | 说明 |
 |---|---|---|

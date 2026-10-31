@@ -21,6 +21,16 @@ caches, saves.
 3. Run `python3 ci/guard/check_derived_ledger.py` — the size must be within 25%
    of the row and no derived-looking table may exist without a row.
 
+## Document-internal derived tables
+
+These documents contain derived identifiers but are not standalone table files.
+They are disclosed here under #16; the ledger script intentionally exempts
+`docs/` from its file/size rows.
+
+- `docs/botw-assets.md` — BotW 1.6.0 title IDs and content metadata.
+- `docs/shared-fonts.md` — six BFTTF sizes and SHA-256 digests.
+- `docs/botw-nvn-usage.md` — ExeFS module sizes and symbol conclusions.
+
 ## Shader and patch tables (not yet present)
 
 When the product tree lands (#20 L1/L2), these will appear and must be added

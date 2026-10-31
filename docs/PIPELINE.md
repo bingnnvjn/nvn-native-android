@@ -13,7 +13,7 @@
 | APK 怎么签名 | 固定 PKCS12 密钥 `ci/signing/artifact.p12`（公开、非发布信任），`apksigner` 显式 v1+v2+v3，证书 SHA-256 钉在 `ci/signing/fingerprint.txt`，每次断言。 |
 | 发布 | v0 不发。开 Release 的前置与发布物见 §4.3。 |
 | import pack 工具 | **三件，不是一件**：`nva-pack`（L0：extract / pack / verify / install）、`nva-rewrite`（L1）、`shader-build`（L2，.NET）。CI 只跑合成 fixture。 |
-| 红线 | README 中英段 + `docs/DERIVED.md` 账本 + 6 个门禁脚本（含魔数/密钥内容扫描）+ release notes 模板固定段。见 §6。 |
+| 红线 | README 中英段 + `docs/DERIVED.md` 账本 + 8 个门禁脚本（含魔数/密钥/个人数据扫描）+ 1 个自测脚本 + release notes 模板固定段。见 §6。 |
 
 ## 1. 为什么是这个形状
 
@@ -39,6 +39,10 @@
 
 **为什么 `guard` 不依赖任何构建**：红线检查必须最快、最便宜，且 PR 上先红。它 `fetch-depth: 0` 扫**全历史**——#16 的教训是「删掉了但历史里还在」同样致命。
 
+**长支线覆盖与缺口（2026-10-31）**：`on.push.branches` 覆盖 `main`、`integrate/main`、`risks/v0`、`arch/l0-l6`、`ci/pipeline`、`spike/abi-slice`、`research/round-1`。`research/round-1` 与 `arch/l0-l6` 分支如果没有带本 workflow，push 仍不过门禁——**合并到 main 或 rebase 后才生效**。`spike/abi-slice` 上的旧 `abi-slice.yml` 仍用 tag 引用 action，合并前需单独钉 SHA。
+
+**分支保护（人工设置，仓库脚本无法自检）**：GitHub 上 main 的 required check 必须设为 `gate`，并勾选禁止 force-push。改完在仓库设置页核对一次；这条不写进 CI。
+
 ## 3. Artifact 契约
 
 | 名字 | 内容 | 保留 | 谁能拿 |
@@ -50,8 +54,8 @@
 
 规则：
 
-1. **artifact 里不出现构建机绝对路径**：APK 与 evidence 都过 `check_artifact.sh`，它拒绝 `/home/<user>/{work,DeepSeekharness,dm-work}` 形态的路径；`sha256sum.txt` 必须写相对文件名。
-2. **artifact 不带 `.git`、缓存、keystore**；`check_artifact.sh` 对目录做成员白名单，并展开 tar 查成员。
+1. **artifact 里不出现构建机绝对路径**：APK 与 evidence 都过 `check_artifact.sh`，它拒绝构建机 home 目录、macOS 用户目录、WSL 挂载路径与 Windows 盘符路径；`sha256sum.txt` 必须写相对文件名。`/tmp/` 不算外露路径。
+2. **artifact 不带 `.git`、缓存、keystore**；`check_artifact.sh` 对目录做成员白名单，并展开 tar/tgz/zip 成员再查。evidence 只接受 `.txt`/`.json`/`.log`/`.sh`/`.so`/`.tar`/`.tar.gz`/`.tgz`/`.zip` 与无后缀 ELF。
 3. **APK 永远带一份 `sha256sum.txt`**，与 `apksigner-verify.txt` 同目录。人拿到包先比对。
 4. 保留期分开：APK 30 天（有人要装），证据 14 天（够复盘）。
 5. 名字里的 `abi-slice-` 是 spike 前缀；产品树落地后换成 `nva-`，门禁脚本参数化，不写死。
@@ -61,7 +65,7 @@
 ### 4.1 v0：固定 artifact 密钥
 
 - 文件：`ci/signing/artifact.p12`（PKCS12，RSA 2048，`CN=NVA Artifact, O=nvn-native-android`，10000 天）。
-- 密码：`nva-artifact`（写在 workflow 里；它不是秘密，见下）。
+- 密码：默认值在 `spike/abi-slice/android/build_apk.sh`，可用 `SIGNING_KEYSTORE_PASS` 覆盖；它不是秘密，见下。
 - 算法：`apksigner` **显式** `--v2-signing-enabled true --v3-signing-enabled true`。**v1 是 no-op**：minSdk 26 下即使写 `--v1-signing-enabled true`，工具也不产出 v1 签名，`verify` 报 `v1 scheme: false`（run 41089559337 实测）。不开 v4：v4 要额外的 `.apk.idsig`，单文件分发会被这件事拖住。
 - 指纹钉死：`ci/signing/fingerprint.txt` 存**证书** SHA-256（`openssl x509 -outform der | sha256sum`），与 `apksigner verify --print-certs` 的 `Signer #1 certificate SHA-256 digest` 同值；`check_manifest.sh` 每次比对。
 - 校验：`apksigner verify -v` 输出里 `v2` / `v3` 两条必须是 `true`；v1 不检查（见上）。
@@ -174,6 +178,7 @@ CI 只跑三件事，全部无游戏数据：
 | shader 原件、翻译产物、pipeline cache | README 段 | `scan_apk.sh`（`.spv`/`.spvbin`/`.xgs`/`shader-cache.bin`）+ `scan_tree.sh` |
 | 存档 | README 段 | `scan_tree.sh`（`*.sav`、`save*/`） |
 | 私有密钥（release.p12 等） | README 段 | `scan_tree.sh` 后缀白名单，只放 `ci/signing/artifact.p12` |
+| 个人数据（本机路径、报告 id） | `docs/PRIVACY.md` | `scan_personal.py` + `check_docs.sh`（tracked Markdown）+ `scan_tree.sh`（tree） |
 | 派生表（可带，但要披露） | `docs/DERIVED.md` | `check_derived_ledger.py` + 内容判据（≥5 处 title ID / `main+0x` 必须有行） |
 
 README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLATE.md` 的固定段，模板里「本页不含 import pack」中英各一句，`check_docs.sh` 断言它。
@@ -182,13 +187,15 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 
 | 脚本 | 判据 | 失败信息 |
 |---|---|---|
-| `ci/guard/scan_tree.sh` | 后缀/路径段黑名单、>4 MiB 未登记二进制、裸 NSO 名、私有密钥、未跟踪文件、全历史 | 打印命中路径 + 来源（tree/untracked/history） |
-| `ci/guard/scan_magic.py` | 偏移 0 / 0x100 的魔数；`name = <32 hex>` 行（文档除外） | 打印文件 + 命中类型 |
+| `ci/guard/scan_tree.sh` | 后缀/路径段黑名单、>4 MiB 未登记二进制、裸 NSO 名、私有密钥、未跟踪文件、全历史；媒体/压缩包/evidence 只查工作树；调用 `scan_personal.py` | 打印命中路径 + 来源（tree/untracked/history） |
+| `ci/guard/scan_magic.py` | 偏移 0 / 0x100 的魔数；`name(key\|kek) = <32 hex>` 行（含 docs）；`--history` 只扫 blob、按 oid 去重并保留 signing/fixtures 豁免；媒体魔数只查工作树 | 打印文件 + 命中类型 |
+| `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
 | `ci/guard/scan_apk.sh` | 条目黑名单、`assets/`、必需条目、体积、绝对路径、`f_<hex>` 符号 | 打印命中条目 |
 | `ci/guard/check_manifest.sh` | 包名/minSdk/targetSdk/ABI/权限/debuggable/签名 scheme/证书指纹 | 打印期望 vs 实际 |
-| `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥、tar 成员、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
+| `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
-| `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」） | 打印缺哪句 |
+| `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
+| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact 做正反例自测 | 打印失败用例 |
 
 ## 8. 不做什么
 

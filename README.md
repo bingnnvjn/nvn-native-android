@@ -34,18 +34,18 @@ bash ci/guard/scan_tree.sh && python3 ci/guard/check_derived_ledger.py
 Read only what the task needs.
 
 - Pipeline decisions (CI, artifacts, signing, import pack, red lines): `docs/PIPELINE.md`
+- Public boundary and personal data: `docs/PRIVACY.md`
 - Derived-work ledger: `docs/DERIVED.md`
 - Release-notes template (when a release is eventually cut): `docs/RELEASE-NOTES-TEMPLATE.md`
 - ABI spike design: `spike/abi-slice/DESIGN.md`
 - ABI spike results: `spike/abi-slice/RESULTS.md`
-- C ABI v1 context: `../work/research/issue19-resolution-v2.md`,
-  `../work/research/review-abi.md`
 - Terms: `GLOSSARY.md`
 - Review rules: `CODING_STANDARDS.md`
 - Cheap checks: `spike/abi-slice/scripts/check.sh`
 - CI: `.github/workflows/ci.yml` (replaces `abi-slice.yml`)
 - Device: `spike/abi-slice/scripts/run_android.sh`
 - Phone APK: `spike/abi-slice/android/build_apk.sh`
+- License / notices: `LICENSE`, `NOTICE`
 
 Tool use:
 
