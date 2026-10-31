@@ -51,6 +51,8 @@ spike/abi-slice/scripts/run_android.sh        # uses adb; no root
 Phone-only APK (no adb, no Termux):
 
 - Artifact `abi-slice-apk` (`abi-slice.apk`, arm64-v8a, debug-signed v2/v3).
+  Each build makes a fresh debug key in its output dir, so uninstall an older
+  build before installing a new one.
 - Install it, enable "install unknown apps" for the file manager/browser.
 - Open **ABI Slice**. It runs `all` automatically.
 - Buttons: `Run all`, `Run gate`, `Abort test`.
