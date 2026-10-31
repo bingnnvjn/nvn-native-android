@@ -5,9 +5,13 @@
 # still served by the repo. Scanning only `git ls-files` gives false comfort.
 # Rationale (review 2026-10-31): a suffix list alone is bypassed by renaming,
 # so content magic and key-shaped text are checked too (scan_magic.py).
+# Rationale (#33/#35): personal-data shapes are checked in the tree only, and
+# media/archive suffixes are rejected in the tree only. The three device
+# screenshots are accepted history; deleting them is the cleanup, not a rewrite.
 #
 # Judged here: game content, keys, saves, shader originals/binaries, carry-over
-# pack layouts, private key material, and oversized unregistered blobs.
+# pack layouts, private key material, media/archives in the tree, personal-data
+# shapes in the tree, and oversized unregistered blobs.
 # Derived tables (identifiers only) are allowed but must appear in
 # docs/DERIVED.md — that is check_derived_ledger.py's job.
 set -euo pipefail
@@ -29,6 +33,8 @@ allowed() {
 }
 
 fail=0
+scanned_tree=0
+scanned_history=0
 report() {
   printf 'RED-LINE: %s\n' "$*" >&2
   fail=1
@@ -36,6 +42,10 @@ report() {
 
 # --- 1. suffixes: game content, archives, shader binaries -------------------
 BANNED_EXT_RE='\.(xci|xcz|nsp|nsz|nca|ncz|nso|npdm|kip|kipx|nss|app|cci|cnmt|pfs0|hfs|hfs0|istorage|kek|tik|sav|bfstm|bars|bntx|bfttf|bflyt|sarc|bfarc|bfres|bnk|bfsar|xgs|spvbin|spv|spirv)$'
+
+# Media and archives are tree-only: the accepted history may still contain the
+# three #30 screenshots. Renaming one still trips scan_magic.py's media magic.
+TREE_ONLY_RE='\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|mp4|m4v|mov|avi|mkv|webm|wav|mp3|flac|ogg|zip|tar|tgz|gz|xz|bz2|7z|rar)$'
 
 # --- 2. paths: keys, extracted game trees, carry-over pack layouts ----------
 # File names that end the path:
@@ -64,11 +74,18 @@ scan_path() {
 # they are big or start with a program magic; scan_magic.py judges that part.
 BARE_NSO_RE='(^|/)(main|sdk|rtld|subsdk[0-9]*|nnSdk)$'
 
-# --- 4. live tree: path rules + size ---------------------------------------
+# --- 4. live tree: path rules + size + tree-only media/evidence -------------
 scan_stream() {
   local where=$1
   while IFS= read -r -d '' p; do
+    scanned_tree=$((scanned_tree + 1))
     scan_path "$p" "$where"
+    if [[ $p =~ $TREE_ONLY_RE ]]; then
+      report "$where: media/archive file: $p"
+    fi
+    if [[ $p =~ (^|/)evidence/ ]]; then
+      report "$where: evidence file in the public tree: $p"
+    fi
     [[ -f $p ]] || continue
     local sz
     sz=$(stat -c %s -- "$p")
@@ -89,16 +106,30 @@ scan_stream "tree" < <(git ls-files -z)
 # accident, and a clean `git status` is not the same as a clean tree.
 scan_stream "untracked" < <(git ls-files -z -o --exclude-standard)
 
-# --- 5. history: every path ever committed ---------------------------------
+# --- 5. history: every path ever committed --------------------------------
+# `git rev-list --objects` emits "<oid> <path>"; the path may contain spaces,
+# so read the raw line and strip only the first field. The previous sed loop
+# stripped the path too, which made every history line look pathless (0 scans).
 while IFS= read -r line; do
+  [[ $line == *" "* ]] || continue
   p=${line#* }
-  [[ $p == "$line" ]] && continue
+  [[ -n $p ]] || continue
+  scanned_history=$((scanned_history + 1))
   scan_path "$p" "history"
-done < <(git rev-list --objects --all | sed 's/^[0-9a-f]* //')
+done < <(git rev-list --objects --all)
 
-# --- 6. content: magic bytes and key-shaped text ---------------------------
-{ git ls-files -z; git ls-files -z -o --exclude-standard; } \
-  | python3 ci/guard/scan_magic.py --stdin-null || fail=1
+# --- 6. content: magic bytes, key-shaped text, personal-data shapes --------
+# The working tree gets media magic and personal shapes; history gets blob
+# magic and key-shaped text only (no accepted media, no accepted old paths).
+tree_paths() {
+  git ls-files -z
+  git ls-files -z -o --exclude-standard
+}
+tree_paths | python3 ci/guard/scan_magic.py --stdin-null || fail=1
+tree_paths | python3 ci/guard/scan_personal.py --stdin-null || fail=1
+python3 ci/guard/scan_magic.py --history || fail=1
+
+printf 'guard: scanned %d tree paths, %d history paths\n' "$scanned_tree" "$scanned_history" >&2
 
 if ((fail)); then
   echo

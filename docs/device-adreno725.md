@@ -1,17 +1,16 @@
 # 设备能力：Redmi Note 12 Turbo（Adreno 725）
 
-> 实测来源：Hardware CapsViewer for Vulkan，报告 https://vulkan.gpuinfo.org/displayreport.php?id=43856
+> 实测来源：Hardware CapsViewer for Vulkan（本机采集；报告 id 与 UUID 只记私有证据）
 > 采集时间：2026-10-24。驱动版本会随系统更新变化，换版本要重采。
 
 ## 身份
 
 | 项 | 值 |
 |---|---|
-| 设备 | Xiaomi 23049RAD8C（Redmi Note 12 Turbo） |
+| 设备 | Redmi Note 12 Turbo |
 | GPU | Adreno (TM) 725，`0x7030002`，vendor `0x5143`（Qualcomm） |
 | Vulkan API | **1.1.128**（不是 1.2/1.3） |
 | 驱动 | `512.615.95` |
-| pipelineCacheUUID | `39E31F0C-4351-0000-0000-020003070000` |
 
 **第一条结论：只能按 Vulkan 1.1 core 设计。** 任何 1.2/1.3 的 core 特性（dynamic rendering、synchronization2 的 core 部分、maintenance4+）都不可依赖，只能用扩展。
 
@@ -82,5 +81,5 @@
 ## 复现
 
 1. 安装 Hardware CapsViewer for Vulkan（`de.saschawillems.vulkancapsviewer`）。
-2. 打开，提交报告，得到 `vulkan.gpuinfo.org/displayreport.php?id=…`。
-3. 系统或驱动更新后重采，并在本文件记录新 id 与日期。
+2. 打开，提交报告，得到 `displayreport.php?id=…` 页面；报告 id 与 pipeline cache UUID 只记私有证据，不写回本文件。
+3. 系统或驱动更新后重采，并在本文件记录新日期与驱动版本。

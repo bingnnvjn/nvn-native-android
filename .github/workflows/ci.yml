@@ -13,8 +13,11 @@ on:
   push:
     branches:
       - main
+      - integrate/main
+      - risks/v0
       - spike/abi-slice
       - arch/l0-l6
+      - research/round-1
       - ci/pipeline
   pull_request:
   workflow_dispatch:
@@ -44,6 +47,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Guard self-tests
+        run: bash ci/guard/test_guards.sh
 
       - name: Scan tree and history
         run: bash ci/guard/scan_tree.sh

@@ -4,17 +4,9 @@
 
 ## 来源
 
-- 固件：Eden 模拟器已安装的固件，`nand/system/Contents/registered/`（本机副本 `E:\1\romrom\firmware\registered`，234 个文件 / 343 MB）。
-- 密钥：`E:\1\romrom\prod.keys`（Eden 的，代际覆盖到 `0x14`）；旧的 1.6.0 用 keys 另存为 `（解游戏） prod.keys`。
-- 提取器：MacNativeGames `games/totk/scripts/extract_shared_fonts.py`（连同 `extract_exefs.py`、`extract_romfs.py`，本地 `tools/mng/`）。
-- 命令：
-
-```
-python3 extract_shared_fonts.py \
-  --keys /mnt/e/1/romrom/prod.keys \
-  --firmware /mnt/e/1/romrom/firmware/registered \
-  --output <本机目录>/fonts
-```
+- 固件：Eden 模拟器已安装的固件，`nand/system/Contents/registered/`（234 个文件 / 343 MB）。
+- 密钥：自有 `prod.keys`，代际覆盖到 `0x14`；旧版 1.6.0 的密钥另存。
+- 提取器：MacNativeGames `games/totk/scripts/extract_shared_fonts.py`（`extract_exefs.py`、`extract_romfs.py` 同目录）。
 
 校验：NCA FS header + 六层 IVFC + 每个 BFTTF 头（解码为 sfnt）。
 
@@ -39,5 +31,5 @@ python3 extract_shared_fonts.py \
 
 ## 边界
 
-- 字体**不进仓库**、不进 APK、不分发；只在本机 `fonts/`（及生成 import pack 时使用）。
+- 字体**不进仓库**、不进 APK、不分发；只在本机私有素材目录（及生成 import pack 时使用）。
 - 若以后换固件版本，重跑一次提取，`manifest.json` 会更新 hash。

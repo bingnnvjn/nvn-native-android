@@ -1,0 +1,9 @@
+nvn-native-android
+Copyright (c) 2026 nvn-native-android contributors
+
+This project is not affiliated with, endorsed by, or sponsored by Nintendo.
+
+Third-party components are used under their own licenses and remain the
+property of their respective authors. The project tree does not vendor game
+content, keys, saves, or shader/pipeline data. See `docs/ARCHITECTURE.md` for
+the pinned components and `docs/DERIVED.md` for derived-identifier disclosures.

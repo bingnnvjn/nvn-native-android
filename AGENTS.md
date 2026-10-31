@@ -2,9 +2,14 @@
 
 Read only what the task needs.
 
+`work/` is a local checkout scratch area. Pointers that start with `../work/`
+are **本机路径，仅本机有效**; they are not part of the public repository. Do not
+copy `work/` content into tracked files.
+
 - ABI spike design: `spike/abi-slice/DESIGN.md`
 - ABI spike results: `spike/abi-slice/RESULTS.md`
-- C ABI v1 context: `../work/research/issue19-resolution-v2.md`,
+- Public boundary: `docs/PRIVACY.md`
+- C ABI v1 context (本机路径，仅本机有效): `../work/research/issue19-resolution-v2.md`,
   `../work/research/review-abi.md`
 - Terms: `GLOSSARY.md`
 - Review rules: `CODING_STANDARDS.md`

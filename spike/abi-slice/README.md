@@ -56,7 +56,7 @@ Phone-only APK (no adb, no Termux):
 - Buttons: `Run all`, `Run gate`, `Abort test`.
 - The result is on the screen and in logcat with tag `abi-slice`.
 - The APK is a JNI shell around the same `guest.c`; it does not change the C ABI.
-- Verified on Redmi Note 12 Turbo (`23049RAD8C`, Android 15, Adreno 725,
+- Verified on Redmi Note 12 Turbo (Android 15, Adreno 725,
   Vulkan 1.1.128): `all` 9/9, `gate` 10/10, `abort` SIGABRT=6.
 
 Local Linux smoke (needs glslang-tools + lavapipe):

@@ -143,14 +143,15 @@
 | 文件 | 改什么 | 自检 | 红了意味着 |
 |---|---|---|---|
 | `.gitignore`（根，新建） | `**/dist/`、`**/target/`、`**/evidence/`、`/research/`、`*.p12` + `!ci/signing/artifact.p12`、`*.keys`、游戏后缀、`*.log` | `git check-ignore -v foo.p12 foo.xci evidence/a.png research/r8.md` 全中；`git check-ignore -q ci/signing/artifact.p12` 退出 1 | 规则写错，该私有文件可被 `git add` |
-| `scan_tree.sh` | 修历史循环：读原始行、`[[ $line == *" "* ]]`、`p=${line#* }`；媒体/压缩包/`evidence/` 只查工作树；调用 `scan_personal.py` | `scanned` 等于 `git rev-list --objects --all \| awk 'NF>1' \| wc -l`（当前全 refs 266）；清理后整树 0；临时 `foo.png` 1 | 树/历史里有被禁路径；先删或加 allowlist |
+| `scan_tree.sh` | 修历史循环：读原始行、`[[ $line == *" "* ]]`、`p=${line#* }`；媒体/压缩包/`evidence/` 只查工作树；调用 `scan_personal.py` | `guard: scanned <tree> tree paths, <history> history paths` 中 history 等于 `git rev-list --objects --all \| awk 'NF>1' \| wc -l`；清理后整树 0；临时 `foo.png` 1 | 树/历史里有被禁路径；先删或加 allowlist |
 | `scan_magic.py` | key 正则 `^[A-Za-z0-9_.-]*(key\|kek)[A-Za-z0-9_.-]*\s*=\s*[0-9a-fA-F]{32,}\s*$`；去掉 `docs/` 豁免；扩文本后缀；`--history` 只扫 blob、按 object id 去重、保留 `ci/signing/` 与 `ci/fixtures/` 豁免；媒体魔数只工作树 | 合成 `master_key_00 = …` → 1；`--history` → 0；png → 1 | key/游戏魔数进树或历史；历史命中登记为事故 |
 | `scan_personal.py`（新建） | 只形状规则：盘符、`/mnt/`、`/home/<user>/`、`/Users/`、`displayreport.php?id=[0-9]+`；不建公开 denylist | 临时文件写 `/mnt/x/x` → 1；清理后整树 0 | 本机路径或报告 id 进了公开文件 |
-| `check_artifact.sh` | evidence 允许 `.txt/.json/.log/.sh/.so/.tar.gz/.tgz` 与无后缀 ELF（`\x7fELF`）；禁媒体/私钥；路径检查只查 `/home/`、`/Users/`、`/mnt/`、`C:\`（不含 `/tmp/`）；tar/tgz/zip 解包后检查 | 临时目录放 `a.png` → 1；`a.txt` 写 `/mnt/x/x` → 1；干净目录 0 | artifact 会公开媒体/路径/密钥 |
-| `check_docs.sh` | 禁 `/mnt/`、`E:\`、`C:\Users\`、`displayreport.php?id=[0-9]+`；保留免责句断言 | 临时插入 → 1；清理后 0 | 文档又写回本机值或报告 id |
+| `check_artifact.sh` | evidence 允许 `.txt/.json/.log/.sh/.so/.tar/.tar.gz/.tgz/.zip` 与无后缀 ELF（`\x7fELF`）；禁媒体/私钥；路径检查只查 `/home/`、`/Users/`、`/mnt/`、`C:\`（不含 `/tmp/`）；tar/tgz/zip 解包后检查 | 临时目录放 `a.png` → 1；`a.txt` 写 `/mnt/x/x` → 1；干净目录 0 | artifact 会公开媒体/路径/密钥 |
+| `check_docs.sh` | 复用 `scan_personal.py` 扫 tracked Markdown（盘符、WSL 挂载、home/Users、数字报告 id）；保留免责句断言 | 临时插入 → 1；清理后 0 | 文档又写回本机值或报告 id |
+| `test_guards.sh`（新建） | 对 `scan_magic.py`、`scan_personal.py`、`check_artifact.sh` 做正反例自测；CI `guard` job 先跑它 | 全部用例通过；故意放宽规则应红 | 门禁被改弱却没人发现 |
 | `check_derived_ledger.py` | 不改脚本；在 `DERIVED.md` 加「文档内派生表」一节（ProgID、字体哈希、模块大小） | `python3 ci/guard/check_derived_ledger.py` → 0 | 账本行与文件对不上 |
-| `ci.yml` | `guard` 已 `fetch-depth: 0`；`gate.needs` 已含 `guard`；`on.push.branches` 补 `integrate/main`、`risks/v0`；`research/round-1`、`arch/l0-l6` 没有 workflow，合 main 或列缺口 | 核对 `on:`；向测试分支 push 一次 | 长期分支绕过门禁 |
-| 分支保护/旧 workflow | main 要求 `gate`、禁 force-push；旧 spike workflow 钉 SHA；补 `LICENSE`/`NOTICE` | 人工核对 GitHub 设置 | 历史可被重写、红可合、许可缺失 |
+| `ci.yml` | `guard` 已 `fetch-depth: 0`；`gate.needs` 已含 `guard`；`on.push.branches` 补 `integrate/main`、`risks/v0`、`research/round-1`；`arch/l0-l6` 的 workflow 缺口写进 `docs/PIPELINE.md` §2 | 核对 `on:`；向测试分支 push 一次 | 长期分支绕过门禁 |
+| 分支保护/旧 workflow | 已补 `LICENSE`/`NOTICE`；main 的 required check/禁 force-push 与 `spike/abi-slice` 旧 workflow 钉 SHA 是仓库外/另一分支动作，缺口写进 `docs/PIPELINE.md` §2 | 人工核对 GitHub 设置 | 历史可被重写、红可合、许可缺失 |
 
 ## 6. 已公开外露的处置
 
