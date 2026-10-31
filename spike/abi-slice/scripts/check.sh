@@ -18,6 +18,17 @@ cc -std=c11 -Wall -Wextra -Werror -Iinclude \
     -o "${TMPDIR:-/tmp}/abi_layout_check_spike.o"
 echo "OK: include/abi_layout_check_spike.c"
 
+echo "== no stale product header paths =="
+# #38: spike files must name their own headers, never the product ones. The
+# filename check in ci/guard/ only catches a reintroduced file, not a stale
+# reference in a comment or script.
+if grep -rn -I --exclude=check.sh --exclude-dir=target --exclude-dir=dist \
+    -e 'include/nva_abi.h' -e 'include/abi_layout_check.c' .; then
+    echo "FAIL: stale product header path; use include/nva_abi_spike.h / include/abi_layout_check_spike.c" >&2
+    exit 1
+fi
+echo "OK: no stale product header paths"
+
 echo "== shell syntax =="
 for f in scripts/*.sh android/build_apk.sh; do
     bash -n "$f"
