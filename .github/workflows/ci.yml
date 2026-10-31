@@ -54,6 +54,11 @@ jobs:
       - name: Scan tree and history
         run: bash ci/guard/scan_tree.sh
 
+      # #38: a spike file named like a product include/ file lets -I order pick
+      # the wrong header with no error. No build needed, so it lives here.
+      - name: Check spike tree shares no product header names
+        run: bash ci/guard/check_header_collision.sh
+
       - name: Check DERIVED ledger
         run: python3 ci/guard/check_derived_ledger.py
 

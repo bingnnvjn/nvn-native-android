@@ -1,7 +1,7 @@
 /* Compile-time C-side layout checks for the v1 structs used by the spike.
- * Build with: cc -std=c11 -Iinclude -c include/abi_layout_check.c
+ * Build with: cc -std=c11 -Iinclude -c include/abi_layout_check_spike.c
  */
-#include "nva_abi.h"
+#include "nva_abi_spike.h"
 #include "nvn_guest.h"
 
 _Static_assert(sizeof(nva_host_services) == 48, "nva_host_services size");

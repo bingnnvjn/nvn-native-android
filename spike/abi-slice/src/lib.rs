@@ -1,6 +1,6 @@
 //! #30 ABI spike host/engine.
 //!
-//! The C ABI subset lives in `include/nva_abi.h`. The NVN-shaped entries are
+//! The C ABI subset lives in `include/nva_abi_spike.h`. The NVN-shaped entries are
 //! reached through `nvnBootstrapLoader(name)` / `nva_nvn_resolve(table, name)`,
 //! which return a guest-callable thunk. Thunks increment a {count,target} slot
 //! and branch to the Rust implementation; the TLS gate variant is in
@@ -1089,7 +1089,7 @@ pub struct NvnBuffer {
 }
 
 // ---------------------------------------------------------------------------
-// Compile-time layout checks (mirror include/abi_layout_check.c)
+// Compile-time layout checks (mirror include/abi_layout_check_spike.c)
 // ---------------------------------------------------------------------------
 const _: () = {
     assert!(size_of::<NvnSlot>() == 16);

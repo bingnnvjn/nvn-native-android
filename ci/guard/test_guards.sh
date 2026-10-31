@@ -65,4 +65,47 @@ printf '\x89PNG\r\n\x1a\n' >"$TMP/src/evil.png"
 ( cd "$TMP/src" && tar czf "$TMP/arch/bad.tar.gz" . )
 expect_rc 1 bash ci/guard/check_artifact.sh "$TMP/arch" self-test evidence
 
+# --- check_header_collision.sh (#38) ---------------------------------------
+# A spike file named like a product include/ file lets -I order pick the wrong
+# header silently; the spike tree must keep zero collisions.
+HDR_REPO=$TMP/hdr-repo
+mkdir -p "$HDR_REPO/include/internal" "$HDR_REPO/spike/abi-slice/include" \
+  "$HDR_REPO/spike/abi-slice/android" "$HDR_REPO/spike/abi-slice/target"
+git -C "$HDR_REPO" init -q
+printf '**/target/\n' >"$HDR_REPO/.gitignore"
+printf '#pragma once\n' >"$HDR_REPO/include/nva_abi.h"
+printf '#pragma once\n' >"$HDR_REPO/include/abi_layout_check.c"
+printf '#pragma once\n' >"$HDR_REPO/include/internal/nva_nvdrv.h"
+printf '#pragma once\n' >"$HDR_REPO/spike/abi-slice/include/nvn_guest.h"
+expect_rc 0 bash ci/guard/check_header_collision.sh "$HDR_REPO"
+
+collide() {
+  local src=$1 dst=$2
+  cp "$HDR_REPO/include/$src" "$HDR_REPO/$dst/"
+  expect_rc 1 bash ci/guard/check_header_collision.sh "$HDR_REPO"
+  rm "$HDR_REPO/$dst/${src##*/}"
+}
+
+# One collision per product file, including one outside include/.
+for pair in \
+  "nva_abi.h spike/abi-slice/include" \
+  "abi_layout_check.c spike/abi-slice/include" \
+  "internal/nva_nvdrv.h spike/abi-slice/android"; do
+  collide "${pair%% *}" "${pair#* }"
+done
+
+# Gitignored build outputs are not part of the tree.
+cp "$HDR_REPO/include/nva_abi.h" "$HDR_REPO/spike/abi-slice/target/"
+expect_rc 0 bash ci/guard/check_header_collision.sh "$HDR_REPO"
+
+# An empty product include/ is a broken check, not a pass.
+mkdir -p "$TMP/hdr-empty"
+git -C "$TMP/hdr-empty" init -q
+expect_rc 2 bash ci/guard/check_header_collision.sh "$TMP/hdr-empty"
+
+# A bad root is a broken check, not a pass.
+mkdir -p "$TMP/hdr-not-git"
+expect_rc 2 bash ci/guard/check_header_collision.sh "$TMP/hdr-not-git"
+expect_rc 2 bash ci/guard/check_header_collision.sh "$TMP/does-not-exist"
+
 echo "guard self-tests OK"

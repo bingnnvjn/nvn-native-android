@@ -30,7 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "nva_abi.h"
+#include "nva_abi_spike.h"
 #include "nvn_guest.h"
 
 /* bionic/old glibc hide this under strict C11; declare it explicitly. */

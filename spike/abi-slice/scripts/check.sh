@@ -14,9 +14,9 @@ python3 scripts/check_table.py
 
 echo "== C ABI layout =="
 cc -std=c11 -Wall -Wextra -Werror -Iinclude \
-    -c include/abi_layout_check.c \
-    -o "${TMPDIR:-/tmp}/abi_layout_check.o"
-echo "OK: include/abi_layout_check.c"
+    -c include/abi_layout_check_spike.c \
+    -o "${TMPDIR:-/tmp}/abi_layout_check_spike.o"
+echo "OK: include/abi_layout_check_spike.c"
 
 echo "== shell syntax =="
 for f in scripts/*.sh android/build_apk.sh; do

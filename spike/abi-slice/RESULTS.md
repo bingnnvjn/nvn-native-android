@@ -104,7 +104,7 @@ does not define which one is mandatory or the gate's stack/thread contract.
 Proposal:
 
 - Add `NVA_NVN_TABLE_GATE_TLS` and `NVA_NVN_TABLE_DIRECT` flags (already
-  prototyped in `include/nva_abi.h`).
+  prototyped in `include/nva_abi_spike.h`).
 - Choose one of:
   - **A (recommended for v1)**: rewriter relocates guest TLS off TPIDR_EL0;
     32 B direct thunk; `stack_bytes` can be non-zero. Gate remains a fallback.

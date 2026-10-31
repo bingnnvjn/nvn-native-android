@@ -55,7 +55,6 @@
 | per-thread TLS 未做 | `GATES §9`；`spike/abi-slice/RESULTS.md` |
 | 8 MRT ≤28 ms @1080p 未测 | `GATES §9`；#19 §8 |
 | 16 KB page / LSE 回退未测 | `GATES §9` |
-| 双 `nva_abi.h` 同名未改 | `GATES §2.2` |
 | `dm/` 与 `ci/dmgendir` 不在仓 | `GATES §9` |
 | 输入 → `presents` p95 ≤100 ms（有阈值，无风险行） | `GATES §7.2` |
 | 过场动画（条件门，§6.2 已写死「阻塞并升级为缺口」） | `GATES §6.2` |

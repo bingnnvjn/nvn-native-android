@@ -8,8 +8,8 @@ context unless it is changing the C ABI.
 A slot change touches all of these files. Check each one:
 
 1. `spike/abi-slice/src/lib.rs` — `SLOT_NAMES`, `SLOT_COUNT`, implementation.
-2. `spike/abi-slice/include/nva_abi.h` and `include/nvn_guest.h` — C prototype.
-3. `spike/abi-slice/include/abi_layout_check.c` — C layout asserts.
+2. `spike/abi-slice/include/nva_abi_spike.h` and `include/nvn_guest.h` — C prototype.
+3. `spike/abi-slice/include/abi_layout_check_spike.c` — C layout asserts.
 4. `spike/abi-slice/nvn-table.json` — name, args, return class, stub class.
 5. `spike/abi-slice/guest/guest.c` — resolve, call, assert.
 6. `spike/abi-slice/DESIGN.md` and `RESULTS.md` — contract and evidence.

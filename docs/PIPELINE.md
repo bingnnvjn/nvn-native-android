@@ -27,7 +27,7 @@
 
 | job | runner | 编什么 | 做什么校验 | 产物 |
 |---|---|---|---|---|
-| `guard` | ubuntu-24.04 | 不编 | 树 + 未跟踪 + 全历史 + 内容魔数/密钥扫描；`DERIVED.md` 对账；README 免责段 | 无 |
+| `guard` | ubuntu-24.04 | 不编 | 树 + 未跟踪 + 全历史 + 内容魔数/密钥扫描；`DERIVED.md` 对账；README 免责段；spike 与产品同名文件断言 | 无 |
 | `pc-x86_64` | ubuntu-24.04 | Rust `nvn_host` + C guest | lavapipe 出图、validation clean、5 条断言、`unimplemented` 必须 SIGABRT | `abi-slice-pc` |
 | `arm64-linux` | ubuntu-24.04-arm | 同上，`+reserve-x18` | gate/stackgate/TLS/x18/FPCR 契约，10 条断言 | `abi-slice-arm64` |
 | `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单 | `abi-slice-apk`、`abi-slice-evidence` |
@@ -188,6 +188,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | 脚本 | 判据 | 失败信息 |
 |---|---|---|
 | `ci/guard/scan_tree.sh` | 后缀/路径段黑名单、>4 MiB 未登记二进制、裸 NSO 名、私有密钥、未跟踪文件、全历史；媒体/压缩包/evidence 只查工作树；调用 `scan_personal.py` | 打印命中路径 + 来源（tree/untracked/history） |
+| `ci/guard/check_header_collision.sh` | 产品 `include/` 文件名集合与 spike 树文件名集合求交；只扫 tracked + 未忽略的未跟踪文件；`include/` 为空判错 | 打印碰撞的 spike 路径 |
 | `ci/guard/scan_magic.py` | 偏移 0 / 0x100 的魔数；`name(key\|kek) = <32 hex>` 行（含 docs）；`--history` 只扫 blob、按 oid 去重并保留 signing/fixtures 豁免；媒体魔数只查工作树 | 打印文件 + 命中类型 |
 | `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
 | `ci/guard/scan_apk.sh` | 条目黑名单、`assets/`、必需条目、体积、绝对路径、`f_<hex>` 符号 | 打印命中条目 |
@@ -195,7 +196,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
-| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact 做正反例自测 | 打印失败用例 |
+| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact、check_header_collision 做正反例自测 | 打印失败用例 |
 
 ## 8. 不做什么
 
@@ -224,7 +225,6 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 
 - `release.p12` 的生成与保管流程（开 Release 时定）。
 - `shell-apk` 的 `ci/dmgendir` 替身在游戏版本变化后怎么再生成（#15 的已知耦合）；`dm/` 树尚未入库（无 `.gitmodules`）。
-- spike 的 `include/nva_abi.h` 与产品 `include/nva_abi.h` 同名同版本号，合并后可能静默取错头（审查发现）；改名 + `#error` 互斥待做。
 - `load-plan.json` 的 schema 归属（ARCH 说 L0 产、L3 消，#27 说另票）。
 - `nva-pack` 的 Windows 构建是否要在 CI 里出（当前只需 Linux/本机）。
 - artifact 保留期是否跟 `main` 的节奏调（30 天够不够装）。

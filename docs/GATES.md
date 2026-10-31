@@ -44,7 +44,7 @@
 ### 2.2 头文件
 
 - 产品头保持 `include/nva_abi.h`。
-- **spike 头改名为 `nva_abi_spike.h`**，并更新 spike 的 include；不保留同名文件（同名加 `#error` 会打断 spike 构建）。CI 断言 spike 树里不存在 `nva_abi.h`。
+- **spike 的 `include/nva_abi.h` / `abi_layout_check.c` 改名为 `nva_abi_spike.h` / `abi_layout_check_spike.c`**，并更新 spike 的 include；不保留同名文件（同名加 `#error` 会打断 spike 构建）。CI 断言（`guard` job，`check_header_collision.sh`）spike 树里不存在与产品 `include/` 同名的文件。
 
 ### 2.3 设备侧
 
@@ -91,8 +91,8 @@ done
 ```
 
 - 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。
-- spike 树不含 `nva_abi.h`（见 §2.2）。
-- 以上并入 `pc-x86_64`，其失败必须让 `gate` 红。
+- spike 树不含与产品 `include/` 同名的文件（见 §2.2）；该断言在 `guard` job。
+- 以上命令与壳断言并入 `pc-x86_64`，其失败必须让 `gate` 红。
 - **变异测试**：删一条 `_Static_assert`、删一个 workspace 成员，各跑一次，CI 必须红；两次的 run id 记进台账。
 
 ## 4. M0b — 真机首帧门

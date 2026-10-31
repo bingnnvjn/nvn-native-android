@@ -5,7 +5,7 @@ process; a `{count,target}` thunk is the only code between them. The point is to
 find where the C ABI v1 contract breaks, not to build an engine.
 
 - Design: [DESIGN.md](DESIGN.md)
-- C ABI subset: `include/nva_abi.h`
+- C ABI subset: `include/nva_abi_spike.h`
 - Spike-local NVN object layouts: `include/nvn_guest.h`
 - Results: [RESULTS.md](RESULTS.md) (filled after the CI runs)
 - Issue: https://github.com/bingnnvjn/nvn-native-android/issues/30
@@ -29,7 +29,7 @@ scripts/jni_smoke.sh   # Linux JNI runtime: all, gate, abort (needs JDK + lavapi
 ```
 
 CI runs both in the PC job. `scripts/check.sh` is cheap and needs no Vulkan.
-The C layout check compiles `include/abi_layout_check.c`; do not remove it.
+The C layout check compiles `include/abi_layout_check_spike.c`; do not remove it.
 
 ## Run
 
