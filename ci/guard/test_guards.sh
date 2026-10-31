@@ -77,22 +77,29 @@ printf '#pragma once\n' >"$HDR_REPO/include/nva_abi.h"
 printf '#pragma once\n' >"$HDR_REPO/include/abi_layout_check.c"
 printf '#pragma once\n' >"$HDR_REPO/include/internal/nva_nvdrv.h"
 printf '#pragma once\n' >"$HDR_REPO/spike/abi-slice/include/nvn_guest.h"
+# Track the product files: in CI they are committed, so the clean case and the
+# collision cases must both work through `git ls-files`, not only untracked.
+git -C "$HDR_REPO" add -A
 expect_rc 0 bash ci/guard/check_header_collision.sh "$HDR_REPO"
 
+# A stray untracked copy is still a collision.
+cp "$HDR_REPO/include/nva_abi.h" "$HDR_REPO/spike/abi-slice/include/"
+expect_rc 1 bash ci/guard/check_header_collision.sh "$HDR_REPO"
+rm "$HDR_REPO/spike/abi-slice/include/nva_abi.h"
+
+# The same collision committed is caught too; one per product file, including
+# one outside include/.
 collide() {
   local src=$1 dst=$2
   cp "$HDR_REPO/include/$src" "$HDR_REPO/$dst/"
+  git -C "$HDR_REPO" add -A
   expect_rc 1 bash ci/guard/check_header_collision.sh "$HDR_REPO"
   rm "$HDR_REPO/$dst/${src##*/}"
+  git -C "$HDR_REPO" add -A
 }
-
-# One collision per product file, including one outside include/.
-for pair in \
-  "nva_abi.h spike/abi-slice/include" \
-  "abi_layout_check.c spike/abi-slice/include" \
-  "internal/nva_nvdrv.h spike/abi-slice/android"; do
-  collide "${pair%% *}" "${pair#* }"
-done
+collide nva_abi.h spike/abi-slice/include
+collide abi_layout_check.c spike/abi-slice/include
+collide internal/nva_nvdrv.h spike/abi-slice/android
 
 # Gitignored build outputs are not part of the tree.
 cp "$HDR_REPO/include/nva_abi.h" "$HDR_REPO/spike/abi-slice/target/"
