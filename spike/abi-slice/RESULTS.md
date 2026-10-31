@@ -11,7 +11,9 @@ Artifacts: `abi-slice-pc`, `abi-slice-arm64`, `abi-slice-android`.
 - **Android AArch64: cross-build PASS + APK PASS + real device PASS**.
   Redmi Note 12 Turbo (`23049RAD8C`, Android 15, Adreno 725, Vulkan 1.1.128):
   `all` 9/9 assertions, `gate` 10/10, `abort` child SIGABRT=6. The APK is the
-  delivery form that was installed on the phone.
+  delivery form that was installed on the phone. Since 2026-10-31 the same APK
+  also carries the Khronos validation layer: `validation_available:1` and both
+  modes report 0 validation errors (see "Adreno 725: Vulkan validation layer").
 - **C ABI v1 is directionally right, but needs four P0 additions** (TLS/thunk
   contract, signature metadata, fatal channel, bootstrap entry); see below.
 
@@ -21,7 +23,7 @@ Artifacts: `abi-slice-pc`, `abi-slice-arm64`, `abi-slice-android`.
 |---|---|---|---|
 | name_lookup | PASS | PASS | PASS |
 | state_setter | PASS | PASS | PASS |
-| draw_vulkan | PASS, validation clean | PASS, validation clean | PASS, validation layer unavailable |
+| draw_vulkan | PASS, validation clean | PASS, validation clean | PASS, validation clean (layer 1.4.350.0) |
 | returns (float/pointer) | PASS | PASS | PASS |
 | unimplemented_typed | PASS, abort=134 | PASS, abort=134 | PASS, abort=SIGABRT 6 |
 
@@ -194,6 +196,53 @@ Vulkan: `Adreno (TM) 725`, `vulkan 1.1.128`, `validation=false` (no layer).
 Screenshots: [all](evidence/device-all.png), [gate](evidence/device-gate.png),
 [abort](evidence/device-abort.png).
 
+## Adreno 725: Vulkan validation layer (2026-10-31, #31)
+
+The phone image has no validation layer. The layer is loaded from the APK's own
+native library directory:
+
+- Layer: Khronos `Vulkan-ValidationLayers` **1.4.350.0**, Android `arm64-v8a`
+  binary (`android-binaries-1.4.350.0.tar.gz`, NDK 27.3, API 26+), from
+  <https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases/tag/vulkan-sdk-1.4.350.0>.
+  The `.so` sits in the APK at `lib/arm64-v8a/libVkLayer_khronos_validation.so`;
+  it is not committed to the repository.
+- Settings (per-app, persist across reboots):
+  `enable_gpu_debug_layers=1`, `gpu_debug_app=com.bingnnvjn.abislice`,
+  `gpu_debug_layer_app=com.bingnnvjn.abislice`,
+  `gpu_debug_layers=VK_LAYER_KHRONOS_validation`.
+- Loader log: `Loaded layer VK_LAYER_KHRONOS_validation`, then
+  `Vulkan device: Adreno (TM) 725 (vulkan 1.1.128) validation=true`.
+
+Result:
+
+| mode | assertions | ok | validation_available | validation_errors |
+|---|---|---|---|---|
+| all | 9 | true | 1 | 0 |
+| gate | 10 | true | 1 | 0 |
+
+```
+I vulkan   : Loaded layer VK_LAYER_KHRONOS_validation
+I abi-slice: Vulkan device: Adreno (TM) 725 (vulkan 1.1.128) validation=true
+I abi-slice: submit: serial=1 draw=(0,3) clear=[1.00,0.00,0.00,1.00] pixel=0xff00ff00 vk_errors=0
+I abi-slice: SUMMARY {"mode":"all","ok":true,"assertions":9,"failed_assertions":0,"failed_checks":0,"tls_gate":0,"validation_available":1}
+I abi-slice: SUMMARY {"mode":"gate","ok":true,"assertions":10,"failed_assertions":0,"failed_checks":0,"tls_gate":1,"validation_available":1}
+```
+
+`logcat` has no `VUID-` and no `Validation Error` line for either run.
+
+Driver message caveat: the Adreno driver also emits `VKDBGUTILWARN003`
+("render pass is not qualified for multipass") through `VK_EXT_debug_utils`,
+with an **empty** `messageIdName`, but severity `ERROR` and type `VALIDATION`.
+It is a driver hint, not a validation-layer finding. `src/vk.rs` therefore
+counts a message as a validation error only when it is not a `VKDBGUTIL*`
+message; driver messages are logged as `[vk driver msg]` and never increment
+`validation_errors`. Any real VUID from the layer still fails the assertion,
+so this does not hide layer findings.
+
+Reproduce: build the APK with the layer `.so` in `lib/arm64-v8a`, install it,
+set the four `gpu_debug_*` settings above, then launch the app and press
+`RUN GATE`.
+
 ## Phone-only APK
 
 The `abi-slice-apk` artifact is a minimal Android shell around the same
@@ -213,9 +262,8 @@ test. It does not change the C ABI.
 
 ## Not covered / next
 
-- Android validation layer: not packaged; the Adreno 725 run has
-  `validation_available:0`, so driver-level validation is not verified. The two
-  Linux lavapipe runs are validation-clean.
+- Android validation layer: loaded from the APK for #31 (above); the layer
+  binary is downloaded from the Khronos release at build time, not committed.
 - The phone run used the APK/JNI path; the `adb` executable path
   (`scripts/run_android.sh`) is built but was not used on this device.
 - Full 523-slot table: the spike has 14 slots; the table shape is validated,
