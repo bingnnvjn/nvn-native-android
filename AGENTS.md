@@ -6,6 +6,9 @@ Read only what the task needs.
 are **本机路径，仅本机有效**; they are not part of the public repository. Do not
 copy `work/` content into tracked files.
 
+- Product workspace: root `Cargo.toml`; members under `crates/nva-*`;
+  `spike/abi-slice` is an excluded standalone package.
+- Workspace gate: `ci/guard/check_workspace.sh` (runs in CI job `pc-x86_64`).
 - ABI spike design: `spike/abi-slice/DESIGN.md`
 - ABI spike results: `spike/abi-slice/RESULTS.md`
 - Public boundary: `docs/PRIVACY.md`
@@ -30,8 +33,9 @@ Tool use:
   `sed`, `head`, or `tail` for inspection.
 
 Before closing a session, audit it with
-`spike/abi-slice/scripts/audit_tool_use.py --latest` (add `--strict` to fail on
-inspection-shaped bash).
+`spike/abi-slice/scripts/audit_tool_use.py --latest`. Report the
+inspection-shaped count in the final message; `--strict` exits 1 on that count
+and is a process note, not a gate (the calls already happened).
 
 ## ABI change
 

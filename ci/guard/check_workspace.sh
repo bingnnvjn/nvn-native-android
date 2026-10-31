@@ -3,14 +3,17 @@
 #
 # Pins the product workspace to exactly five crates, proves the APK shell is not
 # a member, and keeps Android SDK/NDK usage out of the workspace build scripts.
-# Needs cargo + jq, so it runs in pc-x86_64 (the guard job has no Rust toolchain).
+# Needs cargo + jq in production, so the real gate runs in pc-x86_64. The
+# guard self-tests inject root/metadata so they need no Rust toolchain.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+# Test seam for ci/guard/test_guards.sh; production takes git and cargo.
+root="${NVA_WORKSPACE_ROOT:-$(git rev-parse --show-toplevel)}"
+cd "$root"
 shopt -s globstar nullglob
 
 expected=(nva-abi nva-pack nva-rewrite nva-runtime nva-verify)
-metadata="$(cargo metadata --no-deps --format-version 1)"
+metadata="${NVA_WORKSPACE_METADATA:-$(cargo metadata --no-deps --format-version 1)}"
 
 count="$(jq '.packages | length' <<<"$metadata")"
 if [ "$count" -ne "${#expected[@]}" ]; then

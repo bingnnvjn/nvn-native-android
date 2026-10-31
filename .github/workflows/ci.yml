@@ -59,6 +59,9 @@ jobs:
       - name: Check spike tree shares no product header names
         run: bash ci/guard/check_header_collision.sh
 
+      - name: Check doc cross-references
+        run: python3 ci/guard/check_doc_refs.py
+
       - name: Check DERIVED ledger
         run: python3 ci/guard/check_derived_ledger.py
 
@@ -103,6 +106,9 @@ jobs:
       # Android-dependent build scripts. Runs here because guard has no cargo.
       - name: Check product workspace membership
         run: bash ci/guard/check_workspace.sh
+
+      - name: Lint guard scripts
+        run: shellcheck -S warning ci/guard/*.sh
 
       - name: Build nvn_host (release)
         working-directory: spike/abi-slice

@@ -27,7 +27,7 @@
 
 | job | runner | 编什么 | 做什么校验 | 产物 |
 |---|---|---|---|---|
-| `guard` | ubuntu-24.04 | 不编 | 树 + 未跟踪 + 全历史 + 内容魔数/密钥扫描；`DERIVED.md` 对账；README 免责段；spike 与产品同名文件断言 | 无 |
+| `guard` | ubuntu-24.04 | 不编 | 树 + 未跟踪 + 全历史 + 内容魔数/密钥扫描；`DERIVED.md` 对账；README 免责段；spike 与产品同名文件断言；文档 § 引用检查 | 无 |
 | `pc-x86_64` | ubuntu-24.04 | Rust `nvn_host` + C guest | lavapipe 出图、validation clean、5 条断言、`unimplemented` 必须 SIGABRT；产品 workspace 成员恰好 5（#39） | `abi-slice-pc` |
 | `arm64-linux` | ubuntu-24.04-arm | 同上，`+reserve-x18` | gate/stackgate/TLS/x18/FPCR 契约，10 条断言 | `abi-slice-arm64` |
 | `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单 | `abi-slice-apk`、`abi-slice-evidence` |
@@ -190,6 +190,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/scan_tree.sh` | 后缀/路径段黑名单、>4 MiB 未登记二进制、裸 NSO 名、私有密钥、未跟踪文件、全历史；媒体/压缩包/evidence 只查工作树；调用 `scan_personal.py` | 打印命中路径 + 来源（tree/untracked/history） |
 | `ci/guard/check_header_collision.sh` | 产品 `include/` 文件名集合与 spike 树文件名集合求交；只扫 tracked + 未忽略的未跟踪文件；`include/` 为空判错 | 打印碰撞的 spike 路径 |
 | `ci/guard/check_workspace.sh` | 根 workspace 成员恰好 5 个且包名逐一匹配（`cargo metadata --no-deps`）、成员目录无 APK 壳输入、无依赖 Android 的 build script；需 cargo+jq，挂在 `pc-x86_64` | 打印期望 5 个 vs 实际包名或命中文件 |
+| `ci/guard/check_doc_refs.py` | 文档交叉引用（`docs/X.md §N`、`ARCH/GATES/PIPELINE/RISKS/PRIVACY §N`）必须指向存在的标题；三级引用（如 `§4.3.4`）跳过；挂在 `guard` | 打印 file:line + 悬空引用 |
 | `ci/guard/scan_magic.py` | 偏移 0 / 0x100 的魔数；`name(key\|kek) = <32 hex>` 行（含 docs）；`--history` 只扫 blob、按 oid 去重并保留 signing/fixtures 豁免；媒体魔数只查工作树 | 打印文件 + 命中类型 |
 | `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
 | `ci/guard/scan_apk.sh` | 条目黑名单、`assets/`、必需条目、体积、绝对路径、`f_<hex>` 符号 | 打印命中条目 |
@@ -197,7 +198,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
-| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact、check_header_collision 做正反例自测 | 打印失败用例 |
+| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact、check_header_collision、check_workspace、check_doc_refs 做正反例自测 | 打印失败用例 |
 
 ## 8. 不做什么
 
