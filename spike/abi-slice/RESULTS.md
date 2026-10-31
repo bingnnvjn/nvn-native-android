@@ -9,7 +9,7 @@ Artifacts: `abi-slice-pc`, `abi-slice-arm64`, `abi-slice-android`.
 - **PC x86_64: 5/5 PASS** (Mesa lavapipe, Vulkan 1.4.318, validation layer clean).
 - **AArch64 Linux: 5/5 PASS + all probes PASS** (lavapipe arm64, validation clean).
 - **Android AArch64: cross-build PASS + APK PASS + real device PASS**.
-  Redmi Note 12 Turbo (`23049RAD8C`, Android 15, Adreno 725, Vulkan 1.1.128):
+  Redmi Note 12 Turbo (Android 15, Adreno 725, Vulkan 1.1.128):
   `all` 9/9 assertions, `gate` 10/10, `abort` child SIGABRT=6. The APK is the
   delivery form that was installed on the phone. Since 2026-10-31 the same APK
   also carries the Khronos validation layer: `validation_available:1` and both
@@ -179,7 +179,7 @@ loader whether a name was found or which thunk shape it got.
 
 ## Adreno 725 real device (2026-10-30)
 
-Device from the APK screen: `23049RAD8C / Android 15`, `arm64-v8a`.
+Device from the APK screen: Redmi Note 12 Turbo / Android 15, `arm64-v8a`.
 Vulkan: `Adreno (TM) 725`, `vulkan 1.1.128`, `validation=false` (no layer).
 
 - `all`: 9 assertions, 0 failed checks; the five required assertions are
@@ -192,9 +192,7 @@ Vulkan: `Adreno (TM) 725`, `vulkan 1.1.128`, `validation=false` (no layer).
   guest TPIDR_EL0 when it is installed.
 - `x18` sentinel, `fpcr` RMode, `stack_args_direct` (sum 55) all pass.
 - No app crash; only the intended child abort.
-
-Screenshots: [all](evidence/device-all.png), [gate](evidence/device-gate.png),
-[abort](evidence/device-abort.png).
+- Screenshots and logcat are private evidence (#33); they are not in this repo.
 
 ## Adreno 725: Vulkan validation layer (2026-10-31, #31)
 
