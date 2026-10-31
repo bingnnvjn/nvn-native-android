@@ -1,0 +1,6 @@
+[package]
+name = "nva-rewrite"
+description = "L1 NSO0 rewriter (skeleton only)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

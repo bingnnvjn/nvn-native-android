@@ -99,6 +99,11 @@ jobs:
           cargo --version
           rustc --version
 
+      # #39: exactly five product crates, no APK shell in the workspace, no
+      # Android-dependent build scripts. Runs here because guard has no cargo.
+      - name: Check product workspace membership
+        run: bash ci/guard/check_workspace.sh
+
       - name: Build nvn_host (release)
         working-directory: spike/abi-slice
         run: cargo build --release

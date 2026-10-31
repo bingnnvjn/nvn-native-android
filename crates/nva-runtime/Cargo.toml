@@ -1,0 +1,10 @@
+[package]
+name = "nva-runtime"
+description = "Runtime that exports the product C ABI (skeleton only)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The shell links the runtime through the C ABI (docs/ARCHITECTURE.md §7.1).
+[lib]
+crate-type = ["cdylib", "rlib"]

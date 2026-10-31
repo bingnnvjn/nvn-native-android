@@ -1,0 +1,6 @@
+[package]
+name = "nva-abi"
+description = "Rust mirror of the product C ABI header include/nva_abi.h (skeleton only)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

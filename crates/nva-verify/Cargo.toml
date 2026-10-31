@@ -1,0 +1,6 @@
+[package]
+name = "nva-verify"
+description = "Cross-cutting verifier CLI (skeleton only)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
