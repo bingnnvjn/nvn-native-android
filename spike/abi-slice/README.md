@@ -59,6 +59,48 @@ Phone-only APK (no adb, no Termux):
 - Verified on Redmi Note 12 Turbo (`23049RAD8C`, Android 15, Adreno 725,
   Vulkan 1.1.128): `all` 9/9, `gate` 10/10, `abort` SIGABRT=6.
 
+### Validation layer (optional, device only)
+
+The phone image has no Vulkan validation layer. #31 loads the Khronos binary
+from the APK. The layer is third-party and is not committed to this repository.
+
+```sh
+# download + bundle into lib/arm64-v8a
+VVL_VERSION=1.4.350.0 ANDROID_HOME=... bash android/build_apk.sh
+
+# offline / CI: use an already-downloaded tarball
+VVL_ARCHIVE=/path/android-binaries-1.4.350.0.tar.gz VVL_VERSION=1.4.350.0 \
+    ANDROID_HOME=... bash android/build_apk.sh
+```
+
+- Version `1.4.350.0`; archive SHA-256
+  `ea64e96a7c0c4a3711a506b9bc769a0eadc9924f389504051ac1f392213d1b31`.
+- Sources, in order: the GitHub release, `ghfast.top`, `ghproxy.net`.
+  `VVL_BASE_URL` replaces the list with one base URL.
+- Cache: `dist/vvl/<version>/` (gitignored). A cached archive that passes the
+  hash check is never downloaded again. `VVL_CACHE` moves the cache.
+- A download that stays below 2 KB/s for 20 s is dropped and the next source is
+  tried, so a stalled link cannot hang the build.
+- Every archive is checked against the pinned hash before use. A truncated or
+  wrong file fails that source; if no source yields a verified archive the
+  build stops. The layer `.so` that ends up in the APK has SHA-256
+  `34a741d51cb6e9111ec52cda20eee812bcfbcd197348c1404232aacb60e89ef3`.
+- Empty `VVL_VERSION` keeps the old APK shape (no layer).
+
+Enable it on the device (per-app, persists across reboots):
+
+```sh
+adb shell settings put global enable_gpu_debug_layers 1
+adb shell settings put global gpu_debug_app com.bingnnvjn.abislice
+adb shell settings put global gpu_debug_layer_app com.bingnnvjn.abislice
+adb shell settings put global gpu_debug_layers VK_LAYER_KHRONOS_validation
+```
+
+Result: `validation_available:1`; `all` and `gate` report
+`validation_errors:0`. The Adreno `VKDBGUTILWARN003` hint is logged as
+`[vk driver msg]` and is not counted as a validation error. See
+[RESULTS.md](RESULTS.md) for the device log.
+
 Local Linux smoke (needs glslang-tools + lavapipe):
 
 ```sh
