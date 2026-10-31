@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Mesa / Vulkan / glslang
         run: |
@@ -152,7 +152,7 @@ jobs:
 
       - name: Upload PC artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-pc
           path: |
@@ -171,7 +171,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Mesa / Vulkan / glslang
         run: |
@@ -304,7 +304,7 @@ jobs:
 
       - name: Upload arm64 artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-arm64
           path: |
@@ -321,7 +321,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install glslang
         run: |
@@ -346,7 +346,7 @@ jobs:
 
       - name: Set up Android NDK (r27d)
         id: ndk
-        uses: nttld/setup-ndk@v1
+        uses: nttld/setup-ndk@aacaf74664d0f8e1b070a865acb47ee25007386d # v1.6.0
         with:
           ndk-version: r27d
 
@@ -438,7 +438,7 @@ jobs:
         run: bash android/build_apk.sh
 
       - name: Upload Android artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-android
           path: |
@@ -447,7 +447,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: abi-slice-apk
           path: spike/abi-slice/dist/android-apk/
