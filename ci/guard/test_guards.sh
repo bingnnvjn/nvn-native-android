@@ -53,8 +53,10 @@ expect_rc 1 bash ci/guard/check_artifact.sh "$TMP/evidence" self-test evidence
 rm -f "$TMP/evidence/leak.txt"
 
 # A clean archive may carry a bare ELF; an archive with media inside must fail.
+# ELF files legitimately contain source paths; only text members are path-checked.
 mkdir -p "$TMP/src" "$TMP/arch"
 printf '\x7fELF' >"$TMP/src/abi_guest"
+printf '\x7fELF/home/runner/.cargo/registry\n' >"$TMP/src/libnvn_host.so"
 printf 'ok\n' >"$TMP/src/readelf.txt"
 ( cd "$TMP/src" && tar czf "$TMP/arch/clean.tar.gz" . )
 expect_rc 0 bash ci/guard/check_artifact.sh "$TMP/arch" self-test evidence

@@ -35,6 +35,10 @@ MEDIA_RE='\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|mp4|m4v|mov|avi|mkv|webm|wav
 # Game content by suffix, in every member and inside every archive member.
 BANNED_RE='\.(xci|xcz|nsp|nsz|nca|ncz|nso|npdm|kip|kipx|sav|bfstm|bars|bntx|bfttf|bflyt|sarc|bfarc|bfres|bnk|bfsar|xgs|spvbin|spv|spirv|romfs|istorage)$'
 
+# Build-host paths are checked in text members only. ELF files legitimately
+# carry source paths, and the contract checks binaries by magic, not by text.
+LEAK_RE='(/home/|/Users/|/mnt/|[A-Za-z]:\\)'
+
 check_name() {
   local where=$1 rel=$2
   [[ $rel =~ $BANNED_RE ]] && report "game content $where: $rel"
@@ -107,8 +111,9 @@ scan_archive_members() {
     check_name "inside $(basename "$archive")" "$rel"
   done < <(find "$adir" -type f -print0)
 
-  if [[ -n $(find "$adir" -type f -print0 | xargs -0 -r grep -l -E \
-        '(/home/|/Users/|/mnt/|[A-Za-z]:\\)' 2>/dev/null || true) ]]; then
+  if grep -r -l -E "$LEAK_RE" "$adir" \
+        --include='*.txt' --include='*.json' --include='*.log' --include='*.sh' \
+        >/dev/null 2>&1; then
     report "absolute build-host path inside $(basename "$archive")"
   fi
 
@@ -170,7 +175,7 @@ esac
 # the build uses temp dirs legitimately.
 while IFS= read -r f; do
   report "absolute build-host path in artifact text file: $f"
-done < <(grep -r -l -E '(/home/|/Users/|/mnt/|[A-Za-z]:\\)' "$DIR" \
+done < <(grep -r -l -E "$LEAK_RE" "$DIR" \
            --include='*.txt' --include='*.json' --include='*.log' --include='*.sh' 2>/dev/null || true)
 
 if ((fail)); then
