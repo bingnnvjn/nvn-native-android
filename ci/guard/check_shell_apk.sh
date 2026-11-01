@@ -3,16 +3,17 @@
 #
 # Usage: check_shell_apk.sh <apk>
 #
-# Pins what GATES §3 asks of the shell: product package, minSdk 26, no
-# `debuggable` attribute, and a `JNI_OnLoad` export. Package/minSdk/debuggable
-# are read from the *binary* manifest (`aapt2 dump xmltree`), not from
+# This is the GATES §3 assertion set for the shell: product package, minSdk 26,
+# no `debuggable` attribute, and a `JNI_OnLoad` export. Everything is read from
+# the *binary* manifest (`aapt2 dump xmltree`) or the APK entries, never from
 # `dump badging`: build-tools 36 already dropped badging fields once
-# (docs/PIPELINE.md §9) and a missing field would turn an assertion into a
+# (docs/PIPELINE.md §9), and a missing field would turn an assertion into a
 # no-op that always passes.
 #
-# Certificate, permissions, ABI and the v2/v3 schemes stay in
-# ci/guard/check_manifest.sh (GUARD_MODE=product); this script adds the two
-# assertions that one cannot make (xmltree debuggable, JNI_OnLoad).
+# It overlaps check_manifest.sh on purpose. That script keeps the certificate,
+# permission, native-code and v2/v3 scheme checks; the overlap here is the
+# GATES §3 wording (package/minSdk from xmltree) plus the two things badging
+# cannot do: prove the debug flag is off and prove the JNI export exists.
 #
 # Environment:
 #   ANDROID_HOME / ANDROID_SDK_ROOT  aapt2 (same discovery as check_manifest.sh)
@@ -47,10 +48,6 @@ report() { printf 'SHELL-RED-LINE: %s\n' "$*" >&2; fail=1; }
   cat "$TMP/xmltree.txt" >&2
   exit 2
 }
-"$BT/aapt2" dump badging "$APK" > "$TMP/badging.txt" 2>&1 || {
-  echo "guard: aapt2 dump badging failed" >&2
-  exit 2
-}
 
 # `aapt2` prints an int attribute either as `=26` or as `=(type 0x10)0x1a`
 # depending on build-tools. Decode both, and fail loudly on anything else so a
@@ -82,14 +79,12 @@ else
 fi
 
 # GATES §3: "no debuggable". An absent attribute is the platform default
-# `false`; an explicit `false` (TYPE_INT_BOOLEAN 0) is accepted too, so this
-# assertion cannot be satisfied by a badging field going missing.
+# `false`; an explicit `false` is accepted too. This is the assertion that
+# cannot be satisfied by a badging field going missing.
 if grep -q ':debuggable(' "$TMP/xmltree.txt"; then
   deb=$(sed -n 's/.*:debuggable([^)]*)=\(.*\)/\1/p' "$TMP/xmltree.txt" | head -1)
   # Current build-tools print a boolean as `=true` / `=false`; older ones as
-  # `(type 0x12)0x0`. Accept both spellings of false — an explicit
-  # `debuggable="false"` is as good as an absent attribute (GATES §3 wants
-  # "no debuggable", and the platform default is false).
+  # `(type 0x12)0x0` / `0x1`. Accept both spellings of false.
   case $deb in
     *0x0 | false) : ;;
     *) report "android:debuggable is '$deb', expected absent or false" ;;
@@ -103,6 +98,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
         print(name)
 PY
 
+# ABI: check every `lib/` entry, not badging's native-code line, so a second
+# ABI directory cannot hide behind a field build-tools might rename.
 bad_abi=$(grep '^lib/' "$TMP/entries.txt" | grep -v '^lib/arm64-v8a/' || true)
 [[ -z $bad_abi ]] || report "native libraries outside lib/arm64-v8a: $bad_abi"
 
@@ -128,4 +125,4 @@ if ((fail)); then
   cat "$TMP/entries.txt" >&2
   exit 1
 fi
-echo "guard: shell APK OK (package=$pkg minSdk=$min debuggable=absent JNI_OnLoad=yes)"
+echo "guard: shell APK OK (package=$pkg minSdk=$min debuggable=off JNI_OnLoad=yes)"

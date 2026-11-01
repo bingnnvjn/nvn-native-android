@@ -9,7 +9,7 @@
 | 问题 | 决定 |
 |---|---|
 | CI 编什么 | `guard`（红线）、`pc-x86_64`（lavapipe 回归）、`arm64-linux`（AArch64 契约）、`android-aarch64`（交叉 + APK）、`shell-apk`（产品壳，无 Gradle：`aapt2`/`d8`/`apksigner`）。工具 `tools` 仍以骨架预留、默认不启用。 |
-| 出什么 artifact | `abi-slice-apk`、`abi-slice-pc`、`abi-slice-arm64`、`abi-slice-evidence`。**不建 GitHub Release**（v0）。 |
+| 出什么 artifact | `abi-slice-apk`、`abi-slice-pc`、`abi-slice-arm64`、`abi-slice-evidence`、`shell-apk`（产品壳，`nva-shell.apk` + 证据，#46）。**不建 GitHub Release**（v0）。 |
 | APK 怎么签名 | 固定 PKCS12 密钥 `ci/signing/artifact.p12`（公开、非发布信任），`apksigner` 显式 v1+v2+v3，证书 SHA-256 钉在 `ci/signing/fingerprint.txt`，每次断言。 |
 | 发布 | v0 不发。开 Release 的前置与发布物见 §4.3。 |
 | import pack 工具 | **三件，不是一件**：`nva-pack`（L0：extract / pack / verify / install）、`nva-rewrite`（L1）、`shader-build`（L2，.NET）。CI 只跑合成 fixture。 |
@@ -55,7 +55,7 @@
 
 规则：
 
-1. **artifact 里不出现构建机绝对路径**：APK 与 evidence 都过 `check_artifact.sh`，它拒绝构建机 home 目录、macOS 用户目录、WSL 挂载路径与 Windows 盘符路径；`sha256sum.txt` 必须写相对文件名。`/tmp/` 不算外露路径。
+1. **artifact 里不出现构建机绝对路径**：spike 的 APK 与 evidence 都过 `check_artifact.sh`，它拒绝构建机 home 目录、macOS 用户目录、WSL 挂载路径与 Windows 盘符路径；`sha256sum.txt` 必须写相对文件名。`/tmp/` 不算外露路径。产品壳 `shell-apk` 只上传显式文件、不过该目录契约（原因见规则 5）。
 2. **artifact 不带 `.git`、缓存、keystore**；`check_artifact.sh` 对目录做成员白名单，并展开 tar/tgz/zip 成员再查。evidence 只接受 `.txt`/`.json`/`.log`/`.sh`/`.so`/`.tar`/`.tar.gz`/`.tgz`/`.zip` 与无后缀 ELF。
 3. **APK 永远带一份 `sha256sum.txt`**，与 `apksigner-verify.txt` 同目录。人拿到包先比对。
 4. 保留期分开：APK 30 天（有人要装），证据 14 天（够复盘）。
@@ -83,7 +83,7 @@
 
 | 断言 | 值 | 谁检查 |
 |---|---|---|
-| `package` | `com.bingnnvjn.abislice`（spike）/ `com.bingnnvjn.nva`（产品，`GUARD_PACKAGE` 覆盖） | `check_manifest.sh` |
+| `package` | `com.bingnnvjn.abislice`（spike）/ `com.bingnnvjn.nva`（产品，`GUARD_PACKAGE` 覆盖） | `check_manifest.sh`；产品另有 `check_shell_apk.sh`（xmltree） |
 | `minSdk` | 26 | 同上 |
 | `targetSdk` | 34（spike）；产品今天也是 34（#46 沿用 #37 D15）；36 是**待 L6 定**，不是已决 | 同上 |
 | `native-code` | 只有 `arm64-v8a` | 同上 |
@@ -224,6 +224,9 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 2. **build-tools 36 默认产出 v4 的 `.apk.idsig`**，必须显式关掉，否则 artifact 多一个必须一起分发的文件。
 3. **`aapt2 dump badging` 不再输出 `sdkVersion`/`targetSdkVersion`**（这个 manifest 形状下），minSdk/targetSdk 要读 `aapt2 dump xmltree --file AndroidManifest.xml`。
 4. **`tar` 不能在自己的输出目录里打包自己**（`file changed as we read it`）；`sha256sum` 与 `unzip -l` 也不能带绝对路径，否则 artifact 带出构建机路径。
+5. **`aapt2 dump xmltree` 把布尔属性打成 `=true` / `=false` 字面量**（build-tools 36 实测，2026-11-01），而 int 属性打成十进制 `=26`（同一次实测）。按「老格式 `(type 0x12)0x1`」写判据会误杀显式 `debuggable="false"`；`ci/guard/check_shell_apk.sh` 两种拼法都认（#46 的反证 run 抓到的）。
+
+另：`shell-apk` 加入后首个五腿全绿 run 是 [41285991691](https://github.com/bingnnvjn/nvn-native-android/actions/runs/41285991691)（2026-11-01），`shell-apk` 52s。
 
 另外：runner 已强制 node24，v4 系列 action 仍工作但报弃用警告；升级到 v7/v8 是独立动作，不在本票。
 

@@ -2,7 +2,7 @@
 # Build the product shell APK without Gradle (#46).
 #
 # Same no-Gradle path as spike/abi-slice/android/build_apk.sh
-# (docs/PIPELINE.md §9: aapt2 link -> javac -> d8 -> zipalign -> apksigner).
+# (docs/ARCHITECTURE.md §3.7: aapt2 link -> javac -> d8 -> zipalign -> apksigner).
 # The spike script stays untouched on purpose: it is the #30 evidence tree, and
 # #37 D15 says the product shell reuses the *path*, not the code. Anything the
 # two builds share is documented in PIPELINE §9 instead.
@@ -82,7 +82,7 @@ echo "==> resources / manifest"
     -I "$PLATFORM/android.jar" \
     --manifest android/AndroidManifest.xml \
     --min-sdk-version 26 --target-sdk-version 34 \
-    --version-code 1 --version-name 1.0
+    --version-code 1 --version-name 0.1.0-m0a
 
 cp "$BUILD/base.apk" "$BUILD/unsigned.apk"
 cp "$BUILD/dex/classes.dex" "$APKROOT/classes.dex"

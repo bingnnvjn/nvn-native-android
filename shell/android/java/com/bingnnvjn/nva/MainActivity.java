@@ -19,6 +19,8 @@ import android.widget.TextView;
  */
 public class MainActivity extends Activity {
     static {
+        // The product shell links no spike runtime: nvn_host is the #30 ABI
+        // spike's library, not part of this APK yet (#37 Out of Scope).
         System.loadLibrary("nva_shell_jni");
     }
 

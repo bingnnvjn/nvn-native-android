@@ -240,4 +240,13 @@ printf 'bad target: docs/MISSING.md §1\n' >"$DOCS_REPO/nope.md"
 git -C "$DOCS_REPO" add -A
 expect_rc 1 python3 ci/guard/check_doc_refs.py --root "$DOCS_REPO"
 
+# --- check_shell_apk.sh ----------------------------------------------------
+# It must fail closed: a missing APK, or a missing Android toolchain, has to
+# exit 2 instead of silently passing. The positive path needs a real APK, so it
+# is exercised by the shell-apk job (and the #46 counter-proof run), not here.
+expect_rc 2 bash ci/guard/check_shell_apk.sh "$TMP/no-such.apk"
+printf 'not an apk\n' >"$TMP/fake.apk"
+expect_rc 2 env ANDROID_HOME=/nonexistent SHELL_NDK_BIN=/nonexistent \
+  bash ci/guard/check_shell_apk.sh "$TMP/fake.apk"
+
 echo "guard self-tests OK"

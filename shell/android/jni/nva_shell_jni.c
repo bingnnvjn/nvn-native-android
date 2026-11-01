@@ -11,13 +11,10 @@
  */
 #include <jni.h>
 
-#ifdef __ANDROID__
 #include <android/log.h>
+
 #define SHELL_LOG(...) \
     __android_log_print(ANDROID_LOG_INFO, "nva-shell", __VA_ARGS__)
-#else
-#define SHELL_LOG(...) ((void)0)
-#endif
 
 #define SHELL_VERSION "0.1.0-m0a"
 
