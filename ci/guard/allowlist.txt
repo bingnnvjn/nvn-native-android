@@ -1,6 +1,14 @@
-# Paths allowed to exceed the 4 MiB size gate or to be binary.
+# Paths registered as known exceptions to the red-line checks: the 4 MiB size
+# gate, the binary-blob gate, the game-data name blacklist, and the private-key
+# material rule.
 # One glob per line. Keep this list short and explained — every entry is a
-# decision that this file is not game content (docs/PIPELINE.md §6).
+# decision that this file is not game content or key material
+# (docs/PIPELINE.md §6).
 #
 # Format: shell glob, matched against the repo-relative path.
-# (empty by design; the ABI spike has no large committed blobs)
+
+# #42 synthetic fixtures. The names are on the blacklist by shape; the files
+# are generated from ci/fixtures/gen_fixtures.py and contain no game bytes.
+# Register each path on purpose; do not add a directory-wide pattern here.
+ci/fixtures/pack-min/load-plan.json
+ci/fixtures/rewrite-min/shader-cache.bin

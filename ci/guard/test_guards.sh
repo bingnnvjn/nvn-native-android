@@ -38,6 +38,48 @@ expect_rc 1 python3 ci/guard/scan_magic.py "$TMP/media.png"
 # Accepted history must not trip the media check.
 expect_rc 0 python3 ci/guard/scan_magic.py --history
 
+# --- fixtures (#42) --------------------------------------------------------
+# The committed bytes must match a fresh generation, and a hand edit must fail.
+expect_rc 0 python3 ci/fixtures/gen_fixtures.py --check
+
+# Two independent processes must write identical bytes (the spec asks for a
+# real second generation, not only two in-process builds).
+GEN1=$TMP/gen1
+GEN2=$TMP/gen2
+python3 ci/fixtures/gen_fixtures.py --write --root "$GEN1" >/dev/null
+python3 ci/fixtures/gen_fixtures.py --write --root "$GEN2" >/dev/null
+diff -r "$GEN1/ci/fixtures" "$GEN2/ci/fixtures"
+
+FX=$TMP/fixtures
+mkdir -p "$FX/ci"
+cp -a ci/fixtures "$FX/ci/fixtures"
+printf ' ' >>"$FX/ci/fixtures/pack-min/load-plan.json"
+expect_rc 1 python3 ci/fixtures/gen_fixtures.py --check --root "$FX"
+
+# The fixture names are registered one path at a time. The same blacklisted
+# name outside the registration must stay red; a directory-wide exception
+# would make this case pass and must fail the self-test. The files are
+# committed, so the tree scan and the history scan both see them.
+SCAN_REPO=$TMP/scan-repo
+mkdir -p "$SCAN_REPO/ci/guard" "$SCAN_REPO/ci/fixtures/pack-min"
+cp ci/guard/scan_tree.sh ci/guard/scan_magic.py ci/guard/scan_personal.py \
+  ci/guard/allowlist.txt "$SCAN_REPO/ci/guard/"
+printf '{"version":1}\n' >"$SCAN_REPO/ci/fixtures/pack-min/load-plan.json"
+git -C "$SCAN_REPO" init -q
+git -C "$SCAN_REPO" add -A
+git -C "$SCAN_REPO" -c user.name=guard -c user.email=guard@example.invalid \
+  commit -qm self-test
+# scan_tree.sh resolves its root from git, so run it from inside the temp repo.
+run_scan() { ( cd "$SCAN_REPO" && bash ci/guard/scan_tree.sh ); }
+expect_rc 0 run_scan
+mkdir -p "$SCAN_REPO/ci/fixtures/unregistered"
+cp "$SCAN_REPO/ci/fixtures/pack-min/load-plan.json" \
+  "$SCAN_REPO/ci/fixtures/unregistered/load-plan.json"
+git -C "$SCAN_REPO" add -A
+git -C "$SCAN_REPO" -c user.name=guard -c user.email=guard@example.invalid \
+  commit -qm unregistered
+expect_rc 1 run_scan
+
 # --- check_artifact.sh (evidence) ------------------------------------------
 mkdir -p "$TMP/evidence"
 printf '\x7fELF' >"$TMP/evidence/abi_guest"

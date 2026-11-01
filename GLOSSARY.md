@@ -14,3 +14,13 @@
   calls the implementation, and restores guest TLS.
 - **assertion**: one guest check, printed as a `RESULT {...}` JSON line.
 - **APK shell**: the small Android app that runs the same C guest through JNI.
+- **import pack**: the per-game data bundle that the PC tooling produces and the
+  phone imports at run time. It holds the manifest, the load plan, the code and
+  the RomFS blob. It is game data, so it never enters this repository.
+- **load plan**: the segment table of an import pack, stored as
+  `load-plan.json`. It gives the guest VA, size and permissions of each
+  segment, and the entry point. The field schema is owned by L3 and is still
+  open (`docs/PIPELINE.md` §10).
+- **loadplan**: the `nva-verify` subcommand that reads a load plan.
+- **fixture**: synthetic test data committed under `ci/fixtures/`. It has the
+  shape of a real artifact but no game bytes; the title IDs are all zero.

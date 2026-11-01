@@ -166,7 +166,7 @@ CI 只跑三件事，全部无游戏数据：
 2. `nva-verify rewrite --fixture` 与 `nva-verify loadplan --fixture`，断言退出码 0/2/3/4 的语义。
 3. `nva-pack verify ci/fixtures/pack-min/`，覆盖：schema 版本不符、哈希不匹配、`generation` 回退、缺 `load-plan.json`。
 
-**CI 里没有任何一个 job 接受 `--xci` 或 `--keys`。** fixture 的 `title_id` 全 0，且 `ci/fixtures/` 在 `scan_tree.sh` 的 allowlist 里（`shader-cache.bin` 会被红线黑名单误伤，这是已知的例外，必须显式登记）。
+**CI 里没有任何一个 job 接受 `--xci` 或 `--keys`。** fixture 的 `title_id` 全 0。fixture 里被红线名字黑名单命中的文件**逐路径**登记在 `ci/guard/allowlist.txt`（`shader-cache.bin` 会被误伤，这是已知的例外，必须显式登记，不是放宽规则）。最小 load-plan schema、manifest 子集与确定性规则见 `ci/fixtures/README.md`（#42）；正式 L3 schema 仍归 L3（§10）。
 
 ## 6. 红线：落点与门禁
 
