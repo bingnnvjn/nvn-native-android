@@ -1,7 +1,7 @@
 # 里程碑门（M0–M3）
 
 > 来源：#22（评论为指针，本文件为权威正文）。证据全私有，见 #33。
-> 版本：v5（2026-11-01）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）。
+> 版本：v6（2026-11-01）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动。
 > 依据：#20（L0–L6 + C ABI v1）、#21（流水线）、#30（真机竖切）、#31（validation）、#33（公开边界）。
 
 ## 0. 效度边界
@@ -39,7 +39,7 @@
 - **APK 壳不是 cargo 成员**（Kotlin/JNI，`aapt2`/`d8`/`apksigner` 构建），单独断言。
 - `ci/fixtures/pack-min`、`ci/fixtures/rewrite-min`（含 shader cache，`degraded` 为空）。
 - `nva-verify` 子命令：`rewrite`、`loadplan`、`shader`、`hle`、`device`、`smoke`。
-- `shell-apk` job 启用并入 `gate.needs`；其 `dm/`、`ci/dmgendir` 替身先补（`PIPELINE.md` §10）。
+- `shell-apk` job 已启用并入 `gate.needs`（#46）；壳走 spike 跑通的无 Gradle 路径（`aapt2`/`d8`/`apksigner`），不需要 `dm/`、`ci/dmgendir` 替身（`PIPELINE.md` §10）。
 
 ### 2.2 头文件
 
@@ -92,9 +92,9 @@ for p in nva_app_ nva_gfx_ nva_host_; do
 done
 ```
 
-- 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。
+- 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。产品壳这两条在 `shell-apk` job 的 `ci/guard/check_shell_apk.sh`（#46）；spike 的同一组断言在 `android-aarch64`。
 - spike 树不含与产品 `include/` 同名的文件（见 §2.2）；该断言在 `guard` job。
-- 布局断言四条全部进 CI：宿主 C11 / C++17 在 `pc-x86_64`，NDK C11 / C++17 在 `android-aarch64`；其余命令并入 `pc-x86_64`（#45 接线）；壳/APK 断言按 §2.1 就位（`shell-apk` 仍预留）。任一条失败必须让 `gate` 红。
+- 布局断言四条全部进 CI：宿主 C11 / C++17 在 `pc-x86_64`，NDK C11 / C++17 在 `android-aarch64`；其余命令并入 `pc-x86_64`（#45 接线）；壳/APK 断言已就位（`shell-apk` 于 #46 启用并入 `gate.needs`）。任一条失败必须让 `gate` 红。
 - **变异测试**：删一条 `_Static_assert`、删一个 workspace 成员，各跑一次，CI 必须红；两次的 run id 记进台账。
 
 ## 4. M0b — 真机首帧门
@@ -213,7 +213,7 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - movie/codec 能否播未证（`M2a` 前置子门）。
 - 六份 `.bfttf` 已提取并记 hash，不进仓库。
 - 8 MRT ≤28 ms、present 延迟、16 KB page size、`LSE` 回退未实测。
-- `dm/` 与 `ci/dmgendir` 不在仓；`shell-apk` 启用需先补替身。
+- `dm/` 与 `ci/dmgendir` 不在仓；产品壳改走无 Gradle 路径（#46），不再需要这两个替身。d2r 血统壳若将来重提，仍需补。
 
 ## 10. 变更记录
 
@@ -222,3 +222,4 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - v3：修成员数与 fps 口径、注入块、身份现场取。
 - v4：承认「规格 ≠ 可执行物」；列出 §2.4 追加字段（ABI 追加票输入）；退出码改回 #20 语义；`pm path` 前缀、llvmpipe、spike 头改名；M1 用 `guest_svc_count ≥50` + `draw_caller_in_guest` 反回放；M3a 加帧数覆盖与现场读条件；M3b 五场景独立判据；恢复 `run_id`/`ts_utc` 与私有台账。
 - v5：M0a 布局断言补 NDK C++17 一条，四口径（C11 / C++17 × 宿主 / Android 交叉）齐全（#40）；§3 注明四条命令各落哪个 job。
+- v6：`shell-apk` 启用并入 `gate.needs`（#46），壳走无 Gradle 路径；§2.1/§3/§9 删掉「`dm/` 替身先补」「仍预留」的旧措辞。判据值不变。

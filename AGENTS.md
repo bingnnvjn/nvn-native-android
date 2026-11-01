@@ -21,6 +21,8 @@ copy `work/` content into tracked files.
 - CI: `.github/workflows/ci.yml`
 - Device: `spike/abi-slice/scripts/run_android.sh`
 - Phone APK: `spike/abi-slice/android/build_apk.sh`
+- Product shell APK: `shell/android/build_apk.sh` (CI job `shell-apk`, #46);
+  its assertions live in `ci/guard/check_shell_apk.sh`
 
 Tool use:
 

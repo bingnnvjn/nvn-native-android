@@ -1,11 +1,11 @@
 name: ci
 
-# 单一入口。四条腿 + 一个汇总门：
+# 单一入口。五条腿 + 一个汇总门：
 #   guard           — 仓库红线（全历史）+ DERIVED 账本 + README 免责段，不编任何东西
 #   pc-x86_64       — lavapipe 上跑全部断言，validation clean
 #   arm64-linux     — AArch64 原生，x18 保留，TLS/gate/stack 契约
 #   android-aarch64 — NDK 交叉 + aapt2/d8/apksigner 出 APK，再跑 APK 门禁
-#   shell-apk       — 产品壳占位（d2r 血统），v0 不启用
+#   shell-apk       — 产品壳（#46）：无 Gradle 出可安装空壳 + manifest/JNI 断言
 #
 # 设计依据：docs/PIPELINE.md（#21）。所有 action 用 commit SHA，不用 tag。
 
@@ -150,7 +150,7 @@ jobs:
         run: bash ci/guard/check_workspace.sh
 
       - name: Lint guard scripts
-        run: shellcheck -S warning ci/guard/*.sh
+        run: shellcheck -S warning ci/guard/*.sh shell/android/*.sh
 
       # #45: the M0a product gate (docs/GATES.md §3). Until now no CI job built
       # the five-crate product workspace or ran its smoke: the PC leg only built
@@ -590,69 +590,77 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------------------------
-  # 产品壳占位：d2r 血统，需要 ci/dmgendir 替身（#15）。替身未入库前不启用。
+  # 产品壳（#46）：无 Gradle 路径，aapt2/d8/apksigner 出可安装的空壳。
+  # 断言包名 com.bingnnvjn.nva / minSdk 26 / 无 debuggable / JNI_OnLoad。
+  # 不要把它挪进 android-aarch64：那边是 spike 证据链，这里是产品门。
   # ------------------------------------------------------------------------
   shell-apk:
-    name: shell-apk (reserved)
-    if: false
+    name: shell-apk
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+      # Same toolchain (r27d, API 26) as android-aarch64, so the shell and the
+      # spike compile against one NDK and one minSdk.
+      - name: Set up Android NDK (r27d)
+        id: ndk
+        uses: nttld/setup-ndk@aacaf74664d0f8e1b070a865acb47ee25007386d # v1.6.0
         with:
-          distribution: temurin
-          java-version: '17'
+          ndk-version: r27d
 
-      - name: Pin SDK / NDK / CMake (same exact packages as dm/android/docker/Dockerfile)
+      - name: Configure shell toolchain
+        env:
+          NDK_PATH_FROM_ACTION: ${{ steps.ndk.outputs['ndk-path'] }}
         run: |
           set -euo pipefail
-          yes | sdkmanager --sdk_root="$ANDROID_HOME" \
-            "platforms;android-36" "build-tools;36.0.0" \
-            "ndk;29.0.14206865" "cmake;3.31.6"
+          NDK="${ANDROID_NDK_HOME:-${NDK_PATH_FROM_ACTION:-}}"
+          test -d "$NDK" || { echo "::error::NDK not found"; exit 1; }
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          test -x "$TOOLCHAIN/bin/aarch64-linux-android26-clang" \
+            || { echo "::error::missing NDK clang for API 26"; exit 1; }
+          test -x "$TOOLCHAIN/bin/llvm-nm" \
+            || { echo "::error::missing llvm-nm"; exit 1; }
           {
-            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865"
-            echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/29.0.14206865"
+            echo "SHELL_NDK_BIN=$TOOLCHAIN/bin"
+            echo "CC_aarch64_linux_android=$TOOLCHAIN/bin/aarch64-linux-android26-clang"
           } >> "$GITHUB_ENV"
 
-      - name: Build game-free shell APK
-        run: |
-          set -euo pipefail
-          # Do NOT pass DM_ANDROID_CHECKS=ON: android/CMakeLists.txt then returns
-          # at lines 15-19 and never links libdm.so (issue #15 finding). It is a
-          # CMake option, not a Gradle flag, so there is nothing to turn off here.
-          gradle --no-daemon -p dm/android :app:assembleDebug :app:lintDebug \
-            -PdmGenDir=ci/dmgendir -PdmPython=$(command -v python3)
+      # No Gradle, no CMake, no JDK action: the runner image already has the
+      # SDK/build-tools/platforms and a JDK (android-aarch64 relies on the same).
+      - name: Build product shell APK (aapt2/d8/apksigner, no Gradle)
+        run: bash shell/android/build_apk.sh
 
       - name: Guard — APK has no game content
-        run: bash ci/guard/scan_apk.sh dm/android/app/build/outputs/apk/debug/app-debug.apk
+        run: bash ci/guard/scan_apk.sh shell/dist/android-apk/nva-shell.apk
 
-      - name: Guard — product manifest + release certificate
+      # GATES §3: package, minSdk 26, no debuggable (from the binary manifest),
+      # and the JNI_OnLoad export — the two assertions check_manifest.sh cannot
+      # make (its debuggable check reads badging, which silently omits fields).
+      - name: Guard — shell manifest + JNI entry (#46)
+        run: bash ci/guard/check_shell_apk.sh shell/dist/android-apk/nva-shell.apk
+
+      - name: Guard — product manifest + artifact certificate
         env:
           GUARD_MODE: product
           GUARD_PACKAGE: com.bingnnvjn.nva
-          GUARD_TARGET_SDK: '36'
-        run: bash ci/guard/check_manifest.sh dm/android/app/build/outputs/apk/debug/app-debug.apk
-
-      - name: Guard — L6 packaging assertions
-        run: |
-          set -euo pipefail
-          APK=dm/android/app/build/outputs/apk/debug/app-debug.apk
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          "$BT/aapt2" dump badging "$APK" | grep -q "targetSdkVersion:'36'"
-          # 16 KiB page alignment and JNI_OnLoad are ARCH §3.7 CI assertions.
-          # Kept next to the build so they cannot drift into the device job.
+          # targetSdk stays at the spike value until L6 decides 36 (#37 D15).
+          GUARD_TARGET_SDK: '34'
+        run: bash ci/guard/check_manifest.sh shell/dist/android-apk/nva-shell.apk
 
       - name: Upload shell APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: shell-apk
-          path: dm/android/app/build/outputs/apk/debug/app-debug.apk
+          # Explicit members: build_apk.sh leaves build/ and lib/ in the output
+          # directory, and those intermediates must not ride along.
+          path: |
+            shell/dist/android-apk/nva-shell.apk
+            shell/dist/android-apk/*.txt
+          if-no-files-found: error
           retention-days: 30
 
   # ------------------------------------------------------------------------
@@ -696,7 +704,7 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [guard, pc-x86_64, arm64-linux, android-aarch64]
+    needs: [guard, pc-x86_64, arm64-linux, android-aarch64, shell-apk]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -706,10 +714,11 @@ jobs:
           R_PC: ${{ needs['pc-x86_64'].result }}
           R_ARM: ${{ needs['arm64-linux'].result }}
           R_AND: ${{ needs['android-aarch64'].result }}
+          R_SHELL: ${{ needs['shell-apk'].result }}
         run: |
           set -euo pipefail
-          echo "guard=$R_GUARD pc=$R_PC arm64=$R_ARM android=$R_AND"
-          for r in "$R_GUARD" "$R_PC" "$R_ARM" "$R_AND"; do
+          echo "guard=$R_GUARD pc=$R_PC arm64=$R_ARM android=$R_AND shell=$R_SHELL"
+          for r in "$R_GUARD" "$R_PC" "$R_ARM" "$R_AND" "$R_SHELL"; do
             if [ "$r" != "success" ]; then
               echo "::error::a CI leg did not succeed ($r)"
               exit 1

@@ -2,13 +2,13 @@
 
 > 输入：#15（Actions 构建链事实）、#16（公开边界）、#20（L0–L6 与 C ABI v1）、#7（APK + 本地导入包）、
 > `docs/ARCHITECTURE.md`（产品架构，§3.1–3.3 与 §4 是 import pack 的权威定义）。
-> 状态：v0，只覆盖 ABI spike；产品壳 job 以骨架形式预留在同一文件。决定日期 2026-10-31。
+> 状态：v0，覆盖 ABI spike 与产品壳 job（`shell-apk` 于 #46 启用）；`tools` 仍预留。决定日期 2026-10-31，产品壳更新 2026-11-01。
 
 ## 0. 一页结论
 
 | 问题 | 决定 |
 |---|---|
-| CI 编什么 | `guard`（红线）、`pc-x86_64`（lavapipe 回归）、`arm64-linux`（AArch64 契约）、`android-aarch64`（交叉 + APK）。产品壳 `shell-apk` 与工具 `tools` 以骨架预留、默认不启用。 |
+| CI 编什么 | `guard`（红线）、`pc-x86_64`（lavapipe 回归）、`arm64-linux`（AArch64 契约）、`android-aarch64`（交叉 + APK）、`shell-apk`（产品壳，无 Gradle：`aapt2`/`d8`/`apksigner`）。工具 `tools` 仍以骨架预留、默认不启用。 |
 | 出什么 artifact | `abi-slice-apk`、`abi-slice-pc`、`abi-slice-arm64`、`abi-slice-evidence`。**不建 GitHub Release**（v0）。 |
 | APK 怎么签名 | 固定 PKCS12 密钥 `ci/signing/artifact.p12`（公开、非发布信任），`apksigner` 显式 v1+v2+v3，证书 SHA-256 钉在 `ci/signing/fingerprint.txt`，每次断言。 |
 | 发布 | v0 不发。开 Release 的前置与发布物见 §4.3。 |
@@ -32,10 +32,10 @@
 | `arm64-linux` | ubuntu-24.04-arm | 同上，`+reserve-x18` | gate/stackgate/TLS/x18/FPCR 契约，10 条断言 | `abi-slice-arm64` |
 | `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单；C ABI 布局断言 NDK C11 / C++17（#40） | `abi-slice-apk`、`abi-slice-evidence` |
 | `gate` | ubuntu-24.04 | 不编 | 汇总：任一必需 job 非 success 即红 | 无 |
-| `shell-apk`（预留 `if: false`） | ubuntu-24.04 | d2r 血统壳，`gradle :app:assembleDebug` | `ci/dmgendir` 替身 + APK 扫描 + L6 断言 | `shell-apk` |
+| `shell-apk` | ubuntu-24.04 | 产品壳 `shell/android/`，无 Gradle（`aapt2`/`d8`/`apksigner`，#46） | APK 内容扫描（`scan_apk.sh`）、`check_shell_apk.sh`（xmltree 断包名/`minSdk 26`/无 `debuggable` + `llvm-nm -D` 断 `JNI_OnLoad`）、`check_manifest.sh` 的 `product` 模式（证书/ABI/权限/v2+v3） | `shell-apk` |
 | `tools`（预留 `if: false`） | ubuntu-24.04 | `nva-pack` / `nva-rewrite` | 合成 fixture：`nva-verify rewrite/loadplan` | `tools` |
 
-**为什么 `gate` 单独存在**：分支保护只认一个必需检查时，多 job 的组合态不好表达；`gate` 折成一个状态位。**启用 `shell-apk` 或 `tools` 时，必须把它们加进 `gate.needs`**，否则启用后仍然绿——这条写在这里，因为它是开关，不是摆设。
+**为什么 `gate` 单独存在**：分支保护只认一个必需检查时，多 job 的组合态不好表达；`gate` 折成一个状态位。**启用 `shell-apk` 或 `tools` 时，必须把它们加进 `gate.needs`**，否则启用后仍然绿——这条写在这里，因为它是开关，不是摆设。`shell-apk` 已于 #46 加入 `gate.needs`；`tools` 尚未启用。
 
 **为什么 `guard` 不依赖任何构建**：红线检查必须最快、最便宜，且 PR 上先红。它 `fetch-depth: 0` 扫**全历史**——#16 的教训是「删掉了但历史里还在」同样致命。
 
@@ -51,6 +51,7 @@
 | `abi-slice-pc` | `abi_guest`、`libnvn_host.so`、`pc-all.log`、`vulkaninfo.txt`、`readelf-*` | 14 天 | 同上 |
 | `abi-slice-arm64` | 同上（`+reserve-x18`），加 `objdump-thunks.txt`、`stadd.txt` | 14 天 | 同上 |
 | `abi-slice-evidence` | `abi-slice-android.tar.gz`、`dist/android/`（ELF 证据、`readelf.txt`） | 14 天 | 同上 |
+| `shell-apk` | `nva-shell.apk`、`apksigner-verify.txt`、`badging.txt`、`xmltree.txt`、`unzip-l.txt`、`sha256sum.txt` | 30 天 | 同上（#46） |
 
 规则：
 
@@ -58,14 +59,14 @@
 2. **artifact 不带 `.git`、缓存、keystore**；`check_artifact.sh` 对目录做成员白名单，并展开 tar/tgz/zip 成员再查。evidence 只接受 `.txt`/`.json`/`.log`/`.sh`/`.so`/`.tar`/`.tar.gz`/`.tgz`/`.zip` 与无后缀 ELF。
 3. **APK 永远带一份 `sha256sum.txt`**，与 `apksigner-verify.txt` 同目录。人拿到包先比对。
 4. 保留期分开：APK 30 天（有人要装），证据 14 天（够复盘）。
-5. 名字里的 `abi-slice-` 是 spike 前缀；产品树落地后换成 `nva-`，门禁脚本参数化，不写死。
+5. 名字里的 `abi-slice-` 是 spike 前缀；产品壳已用 `nva-shell.apk` / artifact 名 `shell-apk`（#46）。`check_artifact.sh` 的 `apk` 模式仍写死 `abi-slice.apk`，所以 `shell-apk` job 只上传显式文件、不过该契约；要复用它得先把 APK 名参数化。
 
 ## 4. 签名与发布
 
 ### 4.1 v0：固定 artifact 密钥
 
 - 文件：`ci/signing/artifact.p12`（PKCS12，RSA 2048，`CN=NVA Artifact, O=nvn-native-android`，10000 天）。
-- 密码：默认值在 `spike/abi-slice/android/build_apk.sh`，可用 `SIGNING_KEYSTORE_PASS` 覆盖；它不是秘密，见下。
+- 密码：默认值在 `spike/abi-slice/android/build_apk.sh` 与 `shell/android/build_apk.sh`，可用 `SIGNING_KEYSTORE_PASS` 覆盖；它不是秘密，见下。产品壳脚本没有 debug-key 回退：密钥缺失就直接失败。
 - 算法：`apksigner` **显式** `--v2-signing-enabled true --v3-signing-enabled true`。**v1 是 no-op**：minSdk 26 下即使写 `--v1-signing-enabled true`，工具也不产出 v1 签名，`verify` 报 `v1 scheme: false`（run 41089559337 实测）。不开 v4：v4 要额外的 `.apk.idsig`，单文件分发会被这件事拖住。
 - 指纹钉死：`ci/signing/fingerprint.txt` 存**证书** SHA-256（`openssl x509 -outform der | sha256sum`），与 `apksigner verify --print-certs` 的 `Signer #1 certificate SHA-256 digest` 同值；`check_manifest.sh` 每次比对。
 - 校验：`apksigner verify -v` 输出里 `v2` / `v3` 两条必须是 `true`；v1 不检查（见上）。
@@ -84,14 +85,16 @@
 |---|---|---|
 | `package` | `com.bingnnvjn.abislice`（spike）/ `com.bingnnvjn.nva`（产品，`GUARD_PACKAGE` 覆盖） | `check_manifest.sh` |
 | `minSdk` | 26 | 同上 |
-| `targetSdk` | 34（spike）；产品 36 是**待 L6 定**，不是已决 | 同上 |
+| `targetSdk` | 34（spike）；产品今天也是 34（#46 沿用 #37 D15）；36 是**待 L6 定**，不是已决 | 同上 |
 | `native-code` | 只有 `arm64-v8a` | 同上 |
-| 权限 | spike 0 个；产品按 L6 白名单（SAF/FGS），逐条审 | 同上 |
-| `debuggable` | spike `true`；产品 `false` | 同上（按 `mode`） |
+| 权限 | spike 0 个；产品按 L6 白名单（SAF/FGS），逐条审；今天产品 0 个 | 同上 |
+| `debuggable` | spike `true`；产品**属性不存在**（= 默认 `false`） | `check_manifest.sh` 看 badging；`check_shell_apk.sh` 看 xmltree（#46） |
 | 签名 scheme | v2+v3 两条 `true`（v1 在 minSdk 26 下不存在） | `check_manifest.sh` |
 | 体积 | ≤ 32 MB | `scan_apk.sh` |
 
-产品壳真正启用时，`check_manifest.sh` 需要 `GUARD_MODE=product`：包名、targetSdk、权限白名单、`debuggable=false` 四项都变。**现在的脚本只覆盖 spike，产品模式在 `shell-apk` 启用时补**——不写「已经支持」，避免又是一个「声明在、门禁不在」。
+产品壳的 `product` 模式已实现并在 `shell-apk` job 里调用（#46）：包名、targetSdk、权限白名单、`debuggable` 四项按 `GUARD_MODE=product` 判。注意它的 `debuggable` 判据读 `dump badging` 的 `application-debuggable` 行——这个字段在 build-tools 36 上一次实测里掉过（§9），所以「无 debuggable」的权威断言放在 `check_shell_apk.sh` 的 xmltree 上；badging 那条是补充，不是唯一。
+
+产品壳今天实际是：`com.bingnnvjn.nva`、minSdk 26、targetSdk 34、只有 `arm64-v8a`、0 个权限、无 `debuggable` 属性。
 
 ### 4.3 开 Release 的前置条件（写死，不到不做）
 
@@ -195,6 +198,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
 | `ci/guard/scan_apk.sh` | 条目黑名单、`assets/`、必需条目、体积、绝对路径、`f_<hex>` 符号 | 打印命中条目 |
 | `ci/guard/check_manifest.sh` | 包名/minSdk/targetSdk/ABI/权限/debuggable/签名 scheme/证书指纹 | 打印期望 vs 实际 |
+| `ci/guard/check_shell_apk.sh` | 产品壳（#46）：xmltree 断包名/`minSdk 26`/无 `debuggable`，`llvm-nm -D` 断 `JNI_OnLoad`，断 `lib/` 只有 `arm64-v8a` | 打印 xmltree 与 APK 条目 |
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
@@ -226,7 +230,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 ## 10. 仍未定
 
 - `release.p12` 的生成与保管流程（开 Release 时定）。
-- `shell-apk` 的 `ci/dmgendir` 替身在游戏版本变化后怎么再生成（#15 的已知耦合）；`dm/` 树尚未入库（无 `.gitmodules`）。
+- d2r 血统壳（若将来重提）的 `ci/dmgendir` 替身在游戏版本变化后怎么再生成（#15 的已知耦合）；`dm/` 树尚未入库（无 `.gitmodules`）。#46 的产品壳走无 Gradle 路径，不依赖 `dm/` 或该替身。
 - `load-plan.json` 的 schema 归属（ARCH 说 L0 产、L3 消，#27 说另票）。
 - `nva-pack` 的 Windows 构建是否要在 CI 里出（当前只需 Linux/本机）。
 - artifact 保留期是否跟 `main` 的节奏调（30 天够不够装）。
