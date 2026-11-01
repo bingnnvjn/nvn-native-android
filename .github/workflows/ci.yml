@@ -191,8 +191,20 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p nva-verify | tee nva-verify-tests.log
-          grep -q '0 failed' nva-verify-tests.log
-          echo "nva-verify: 0/2/3/4 exit codes green"
+          # `0 failed` alone is not an assertion: libtest prints it for an
+          # empty target too, so a deleted test file would stay green. Pin one
+          # test per documented exit code (0/2/3/4) by name instead.
+          for name in \
+            synthetic_pack_exits_0 \
+            tampered_load_plan_exits_2 \
+            unimplemented_subcommands_exit_3_and_say_why \
+            missing_fixture_exits_4; do
+            grep -q "test ${name} \.\.\. ok" nva-verify-tests.log || {
+              echo "::error::exit-code test ${name} did not run and pass"
+              exit 1
+            }
+          done
+          echo "nva-verify: 0/2/3/4 exit codes pinned by test name"
 
       - name: Product smoke — one frame, four JSON fields (#44)
         run: |
