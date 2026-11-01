@@ -617,7 +617,11 @@ jobs:
           NDK_PATH_FROM_ACTION: ${{ steps.ndk.outputs['ndk-path'] }}
         run: |
           set -euo pipefail
-          NDK="${ANDROID_NDK_HOME:-${NDK_PATH_FROM_ACTION:-}}"
+          # The action's output wins over the runner's pre-set ANDROID_NDK_HOME:
+          # the image ships its own NDK, and preferring that would silently
+          # defeat the r27d pin (both were r27d on 2026-11-01, so the pin was
+          # nominal until #46's review caught it).
+          NDK="${NDK_PATH_FROM_ACTION:-${ANDROID_NDK_HOME:-}}"
           test -d "$NDK" || { echo "::error::NDK not found"; exit 1; }
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           test -x "$TOOLCHAIN/bin/aarch64-linux-android26-clang" \
@@ -625,6 +629,7 @@ jobs:
           test -x "$TOOLCHAIN/bin/llvm-nm" \
             || { echo "::error::missing llvm-nm"; exit 1; }
           {
+            echo "ANDROID_NDK_HOME=$NDK"
             echo "SHELL_NDK_BIN=$TOOLCHAIN/bin"
             echo "CC_aarch64_linux_android=$TOOLCHAIN/bin/aarch64-linux-android26-clang"
           } >> "$GITHUB_ENV"

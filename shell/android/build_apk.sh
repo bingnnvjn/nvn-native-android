@@ -104,7 +104,10 @@ if [ ! -f "$KS" ]; then
     echo "error: artifact keystore missing: $KS (docs/PIPELINE.md §4.1)" >&2
     exit 1
 fi
-# v2/v3 only. v1 (JAR signing) is a no-op at minSdk 26 — see PIPELINE §9.
+# v2/v3 are the schemes the gate asserts. At minSdk 26 apksigner does not
+# validate v1, and it can still leave JAR-signing files in META-INF
+# (X-Android-APK-Signed) — measured in #46 — so v1 is neither requested nor
+# checked, and nothing here claims the APK contains no v1 files.
 "$BT/apksigner" sign \
     --ks "$KS" --ks-type PKCS12 \
     --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS" \

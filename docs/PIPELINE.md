@@ -220,7 +220,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 
 修 CI 时撞到的四个「纸面推断错了」：
 
-1. **v1 签名在 minSdk 26 下根本不存在**：显式 `--v1-signing-enabled true` 也只得到 `v1 scheme: false`。断言改成 v2/v3。
+1. **v1 在 minSdk 26 下不进验证**：显式 `--v1-signing-enabled true` 也只得到 `v1 scheme: false`，所以断言改成 v2/v3。**#46 修正**：`v1 scheme: false` 的意思是「没有用 v1 验证」，不是「APK 里没有 v1 文件」——产品壳 APK 实测仍带 `META-INF/*.SF` / `.RSA` / `MANIFEST.MF`，`.SF` 里有 `X-Android-APK-Signed: 2, 3`。门禁只断 v2/v3，不假设「没有 v1」。
 2. **build-tools 36 默认产出 v4 的 `.apk.idsig`**，必须显式关掉，否则 artifact 多一个必须一起分发的文件。
 3. **`aapt2 dump badging` 不再输出 `sdkVersion`/`targetSdkVersion`**（这个 manifest 形状下），minSdk/targetSdk 要读 `aapt2 dump xmltree --file AndroidManifest.xml`。
 4. **`tar` 不能在自己的输出目录里打包自己**（`file changed as we read it`）；`sha256sum` 与 `unzip -l` 也不能带绝对路径，否则 artifact 带出构建机路径。
