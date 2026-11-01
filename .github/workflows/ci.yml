@@ -202,7 +202,7 @@ jobs:
           # The four keys are the real ones (#37 D9). `vk_errors` is the old
           # docs wording, fixed in #48; it must not appear in this gate.
           grep -Eq '"device_name" *: *"[^"]*llvmpipe' smoke.json
-          grep -Eq '"pixel_rgba" *: *"0xff00ff00"' smoke.json
+          grep -Eq '"pixel_rgba" *: *"0xdeadbeef"' smoke.json
           grep -Eq '"validation_available" *: *1' smoke.json
           grep -Eq '"validation_errors" *: *0' smoke.json
           # smoke.json is asserted here and deliberately not uploaded: the PC
