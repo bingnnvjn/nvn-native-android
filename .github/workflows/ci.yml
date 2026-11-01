@@ -88,6 +88,31 @@ jobs:
             mesa-vulkan-drivers vulkan-tools vulkan-validationlayers \
             glslang-tools libvulkan-dev build-essential shellcheck
 
+      # Kept first among the checks: both the spike guest and the product smoke
+      # need the ICD through GITHUB_ENV, and the product steps below must not
+      # repeat the discovery logic.
+      - name: Configure lavapipe ICD
+        working-directory: spike/abi-slice
+        run: |
+          set -euo pipefail
+          mkdir -p dist/pc
+          icd=""
+          for f in /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+                   /usr/share/vulkan/icd.d/lvp_icd.json; do
+            if [ -f "$f" ]; then icd="$f"; break; fi
+          done
+          if [ -z "$icd" ]; then
+            for f in /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+              if [ -f "$f" ]; then icd="$f"; break; fi
+            done
+          fi
+          if [ -n "$icd" ]; then
+            echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+            echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          else
+            echo "::warning::lavapipe ICD JSON not found; falling back to loader default"
+          fi
+
       # #40: until now no CI job ever compiled the product header, so the C
       # layout asserts were zero coverage. Same assertion source, four
       # compilers: host C11/C++17 here, NDK C11/C++17 in android-aarch64.
@@ -127,31 +152,66 @@ jobs:
       - name: Lint guard scripts
         run: shellcheck -S warning ci/guard/*.sh
 
+      # #45: the M0a product gate (docs/GATES.md §3). Until now no CI job built
+      # the five-crate product workspace or ran its smoke: the PC leg only built
+      # the spike tree. Every command below asserts output under `set -euo
+      # pipefail`, so a failure fails pc-x86_64 and therefore `gate`.
+      - name: Build the product workspace (release)
+        run: |
+          set -euo pipefail
+          cargo build --workspace --release
+          # The exported prefixes are the shell's entry contract (#37 D6); an
+          # empty cdylib would otherwise pass on exit code alone.
+          for prefix in nva_app_ nva_gfx_ nva_host_; do
+            count="$(nm -D target/release/libnva_runtime.so | grep -c " T ${prefix}" || true)"
+            echo "exported ${prefix}*: ${count}"
+            [ "$count" -ge 1 ] || {
+              echo "::error::libnva_runtime.so exports no ${prefix} symbol"
+              exit 1
+            }
+          done
+
+      - name: Product ABI layout test
+        run: |
+          set -euo pipefail
+          cargo test -p nva-abi -- --exact layout_sizes | tee layout-sizes.log
+          grep -q '1 passed' layout-sizes.log
+          echo "layout_sizes: 1 passed"
+
+      - name: Product loadplan on the synthetic fixture (#42)
+        run: |
+          set -euo pipefail
+          plan="$(cargo run -p nva-verify -- loadplan --fixture ci/fixtures/pack-min)"
+          echo "$plan"
+          jq -e '.schema == 1 and .segments == 1 and .entry == 4096
+                 and .fixture == "ci/fixtures/pack-min"' <<<"$plan" >/dev/null
+          echo "loadplan: schema=1 entry=4096 segments=1"
+
+      - name: nva-verify exit-code matrix (#43)
+        run: |
+          set -euo pipefail
+          cargo test -p nva-verify | tee nva-verify-tests.log
+          grep -q '0 failed' nva-verify-tests.log
+          echo "nva-verify: 0/2/3/4 exit codes green"
+
+      - name: Product smoke — one frame, four JSON fields (#44)
+        run: |
+          set -euo pipefail
+          cargo run -p nva-verify -- smoke --headless --frames 1 --json smoke.json
+          cat smoke.json
+          # The four keys are the real ones (#37 D9). `vk_errors` is the old
+          # docs wording, fixed in #48; it must not appear in this gate.
+          grep -Eq '"device_name" *: *"[^"]*llvmpipe' smoke.json
+          grep -Eq '"pixel_rgba" *: *"0xff00ff00"' smoke.json
+          grep -Eq '"validation_available" *: *1' smoke.json
+          grep -Eq '"validation_errors" *: *0' smoke.json
+          # smoke.json is asserted here and deliberately not uploaded: the PC
+          # artifact step lists spike files only (#37 D17, docs/GATES.md §8).
+          echo "smoke: device_name/pixel_rgba/validation_available/validation_errors"
+
       - name: Build nvn_host (release)
         working-directory: spike/abi-slice
         run: cargo build --release
-
-      - name: Configure lavapipe ICD
-        working-directory: spike/abi-slice
-        run: |
-          set -euo pipefail
-          mkdir -p dist/pc
-          icd=""
-          for f in /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-                   /usr/share/vulkan/icd.d/lvp_icd.json; do
-            if [ -f "$f" ]; then icd="$f"; break; fi
-          done
-          if [ -z "$icd" ]; then
-            for f in /usr/share/vulkan/icd.d/lvp_icd.*.json; do
-              if [ -f "$f" ]; then icd="$f"; break; fi
-            done
-          fi
-          if [ -n "$icd" ]; then
-            echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
-            echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
-          else
-            echo "::warning::lavapipe ICD JSON not found; falling back to loader default"
-          fi
 
       - name: Compile C guest
         working-directory: spike/abi-slice
