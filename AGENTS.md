@@ -49,6 +49,10 @@ or `nvn-table.json`.
 
 issue 和 spec 都走 GitHub Issues（`gh` CLI）。见 `docs/agents/issue-tracker.md`。
 
+### Pull requests
+
+开任何 PR 前先跑 `pr` skill（`/pr`），PR body 用它的输出。
+
 ### Triage labels
 
 五个 triage 角色用中文标签。见 `docs/agents/triage-labels.md`。
