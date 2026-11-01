@@ -4,3 +4,9 @@ description = "Cross-cutting verifier CLI (skeleton only)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+# The verifier consumes the product header layouts (#41) and drives the runtime
+# only through its exported C symbols (#37 D7).
+nva-abi = { path = "../nva-abi" }
+nva-runtime = { path = "../nva-runtime" }

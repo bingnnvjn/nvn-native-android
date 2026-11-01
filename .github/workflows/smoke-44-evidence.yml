@@ -1,0 +1,112 @@
+name: smoke-44-evidence
+
+# Temporary evidence run for #44: the product smoke on lavapipe.
+#
+# #45 replaces this with the real M0a gate wiring in ci.yml (docs/GATES.md §3);
+# this file is deleted once #44 records its run id, so it never becomes a gate.
+# It is a separate workflow instead of a ci.yml step to keep the temporary run
+# out of `gate.needs` while #42/#43 are still in flight.
+
+on:
+  push:
+    branches:
+      - spike/abi-slice
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-44-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product-smoke:
+    name: product smoke (#44 evidence)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install Mesa / Vulkan / validation layer / glslang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers vulkan-tools vulkan-validationlayers \
+            libvulkan-dev glslang-tools
+
+      - name: Configure lavapipe ICD
+        run: |
+          set -euo pipefail
+          icd=""
+          for f in /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+                   /usr/share/vulkan/icd.d/lvp_icd.json; do
+            if [ -f "$f" ]; then icd="$f"; break; fi
+          done
+          if [ -z "$icd" ]; then
+            for f in /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+              if [ -f "$f" ]; then icd="$f"; break; fi
+            done
+          fi
+          test -n "$icd"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          echo "using ICD $icd"
+
+      - name: Install Rust stable
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo --version
+
+      # The three ABI prefixes must be in the shared library, not only in the
+      # source (#37 D6). Built first because the cdylib is the artifact that
+      # carries them.
+      - name: Build, check exported prefixes, run the product smoke
+        run: |
+          set -euo pipefail
+          cargo build --workspace --release
+          for prefix in nva_app_ nva_gfx_ nva_host_; do
+            nm -D target/release/libnva_runtime.so | grep " T ${prefix}" \
+              || { echo "missing exported prefix ${prefix}"; exit 1; }
+          done
+          ./target/release/nva-verify smoke --headless --frames 1 --json smoke.json
+          cat smoke.json
+          grep -Eq '"device_name" *: *"[^"]*llvmpipe' smoke.json
+          grep -Eq '"pixel_rgba" *: *"0xff00ff00"' smoke.json
+          grep -Eq '"validation_available" *: *1' smoke.json
+          grep -Eq '"validation_errors" *: *0' smoke.json
+
+      # Negative #1 (#44 §5.5): without the validation layer the same frame must
+      # exit 3 and say `validation_available: 0`, never "clean".
+      - name: Negative — no validation layer must exit 3
+        run: |
+          set -euo pipefail
+          sudo apt-get remove -y vulkan-validationlayers
+          set +e
+          ./target/release/nva-verify smoke --headless --frames 1 --json smoke-no-layer.json
+          rc=$?
+          set -e
+          cat smoke-no-layer.json
+          test "$rc" -eq 3
+          grep -Eq '"validation_available" *: *0' smoke-no-layer.json
+          grep -Eq '"pixel_rgba" *: *"0xff00ff00"' smoke-no-layer.json
+          if grep -qi clean smoke-no-layer.json; then
+            echo "smoke-no-layer.json must not claim clean"; exit 1
+          fi
+
+      # Negative #2 (#44 §5.5): the message filter that keeps driver
+      # VKDBGUTIL*/empty-id messages out of `validation_errors` (#31).
+      - name: Negative — empty-id driver messages never count
+        run: cargo test -p nva-runtime --release debug_filter
+
