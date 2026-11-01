@@ -85,9 +85,13 @@ fi
 # `false`; an explicit `false` (TYPE_INT_BOOLEAN 0) is accepted too, so this
 # assertion cannot be satisfied by a badging field going missing.
 if grep -q ':debuggable(' "$TMP/xmltree.txt"; then
-  deb=$(sed -n 's/.*:debuggable([^)]*)=\([^ ]*\).*/\1/p' "$TMP/xmltree.txt" | head -1)
+  deb=$(sed -n 's/.*:debuggable([^)]*)=\(.*\)/\1/p' "$TMP/xmltree.txt" | head -1)
+  # Current build-tools print a boolean as `=true` / `=false`; older ones as
+  # `(type 0x12)0x0`. Accept both spellings of false — an explicit
+  # `debuggable="false"` is as good as an absent attribute (GATES §3 wants
+  # "no debuggable", and the platform default is false).
   case $deb in
-    *0x0) : ;;
+    *0x0 | false) : ;;
     *) report "android:debuggable is '$deb', expected absent or false" ;;
   esac
 fi
