@@ -28,9 +28,9 @@
 | job | runner | 编什么 | 做什么校验 | 产物 |
 |---|---|---|---|---|
 | `guard` | ubuntu-24.04 | 不编 | 树 + 未跟踪 + 全历史 + 内容魔数/密钥扫描；`DERIVED.md` 对账；README 免责段；spike 与产品同名文件断言；文档 § 引用检查 | 无 |
-| `pc-x86_64` | ubuntu-24.04 | Rust `nvn_host` + C guest | lavapipe 出图、validation clean、5 条断言、`unimplemented` 必须 SIGABRT；产品 workspace 成员恰好 5（#39） | `abi-slice-pc` |
+| `pc-x86_64` | ubuntu-24.04 | Rust `nvn_host` + C guest | lavapipe 出图、validation clean、5 条断言、`unimplemented` 必须 SIGABRT；产品 workspace 成员恰好 5（#39）；C ABI 布局断言 宿主 C11 / C++17（`-fsyntax-only`，#40） | `abi-slice-pc` |
 | `arm64-linux` | ubuntu-24.04-arm | 同上，`+reserve-x18` | gate/stackgate/TLS/x18/FPCR 契约，10 条断言 | `abi-slice-arm64` |
-| `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单 | `abi-slice-apk`、`abi-slice-evidence` |
+| `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单；C ABI 布局断言 NDK C11 / C++17（#40） | `abi-slice-apk`、`abi-slice-evidence` |
 | `gate` | ubuntu-24.04 | 不编 | 汇总：任一必需 job 非 success 即红 | 无 |
 | `shell-apk`（预留 `if: false`） | ubuntu-24.04 | d2r 血统壳，`gradle :app:assembleDebug` | `ci/dmgendir` 替身 + APK 扫描 + L6 断言 | `shell-apk` |
 | `tools`（预留 `if: false`） | ubuntu-24.04 | `nva-pack` / `nva-rewrite` | 合成 fixture：`nva-verify rewrite/loadplan` | `tools` |

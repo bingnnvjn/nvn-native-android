@@ -1,7 +1,7 @@
 # 里程碑门（M0–M3）
 
 > 来源：#22（评论为指针，本文件为权威正文）。证据全私有，见 #33。
-> 版本：v4（2026-10-31）。v1–v3 均经两遍审查；本版修的是「规格 vs 可执行物」的先后。
+> 版本：v5（2026-11-01）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）。
 > 依据：#20（L0–L6 + C ABI v1）、#21（流水线）、#30（真机竖切）、#31（validation）、#33（公开边界）。
 
 ## 0. 效度边界
@@ -77,6 +77,8 @@ cc  -std=c11   -Iinclude -fsyntax-only include/abi_layout_check.c
 c++ -std=c++17 -Iinclude -fsyntax-only include/abi_layout_check.c
 "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" \
     -std=c11 -Iinclude -fsyntax-only include/abi_layout_check.c
+"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" \
+    -std=c++17 -Iinclude -fsyntax-only include/abi_layout_check.c
 [ "$(cargo metadata --no-deps --format-version 1 | jq '.packages | length')" = "5" ]
 cargo build --workspace --release
 cargo test -p nva-abi -- --exact layout_sizes | tee t.log; grep -q '1 passed' t.log
@@ -92,7 +94,7 @@ done
 
 - 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。
 - spike 树不含与产品 `include/` 同名的文件（见 §2.2）；该断言在 `guard` job。
-- 以上命令与壳断言并入 `pc-x86_64`，其失败必须让 `gate` 红。
+- 布局断言四条全部进 CI：宿主 C11 / C++17 在 `pc-x86_64`，NDK C11 / C++17 在 `android-aarch64`；其余命令并入 `pc-x86_64`（#45 接线）；壳/APK 断言按 §2.1 就位（`shell-apk` 仍预留）。任一条失败必须让 `gate` 红。
 - **变异测试**：删一条 `_Static_assert`、删一个 workspace 成员，各跑一次，CI 必须红；两次的 run id 记进台账。
 
 ## 4. M0b — 真机首帧门
@@ -219,3 +221,4 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - v2：载体与退出码、M1 guest 证据、`M2-0`、720p 记录。
 - v3：修成员数与 fps 口径、注入块、身份现场取。
 - v4：承认「规格 ≠ 可执行物」；列出 §2.4 追加字段（ABI 追加票输入）；退出码改回 #20 语义；`pm path` 前缀、llvmpipe、spike 头改名；M1 用 `guest_svc_count ≥50` + `draw_caller_in_guest` 反回放；M3a 加帧数覆盖与现场读条件；M3b 五场景独立判据；恢复 `run_id`/`ts_utc` 与私有台账。
+- v5：M0a 布局断言补 NDK C++17 一条，四口径（C11 / C++17 × 宿主 / Android 交叉）齐全（#40）；§3 注明四条命令各落哪个 job。

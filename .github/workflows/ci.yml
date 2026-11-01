@@ -88,6 +88,23 @@ jobs:
             mesa-vulkan-drivers vulkan-tools vulkan-validationlayers \
             glslang-tools libvulkan-dev build-essential shellcheck
 
+      # #40: until now no CI job ever compiled the product header, so the C
+      # layout asserts were zero coverage. Same assertion source, four
+      # compilers: host C11/C++17 here, NDK C11/C++17 in android-aarch64.
+      # build-essential above is what makes cc/c++ available; a nonzero exit
+      # fails the step, the job, and therefore `gate`.
+      - name: C ABI layout — host C11
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Iinclude -fsyntax-only include/abi_layout_check.c
+          echo "layout check: host c11 ok"
+
+      - name: C ABI layout — host C++17
+        run: |
+          set -euo pipefail
+          c++ -std=c++17 -Iinclude -fsyntax-only include/abi_layout_check.c
+          echo "layout check: host c++17 ok"
+
       - name: Install Rust stable
         run: |
           set -euo pipefail
@@ -381,15 +398,36 @@ jobs:
           test -d "$NDK" || { echo "::error::NDK not found"; exit 1; }
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CC_BIN="$TOOLCHAIN/bin/aarch64-linux-android26-clang"
+          CXX_BIN="$TOOLCHAIN/bin/aarch64-linux-android26-clang++"
           AR_BIN="$TOOLCHAIN/bin/llvm-ar"
           test -x "$CC_BIN" || { echo "::error::missing $CC_BIN"; exit 1; }
+          test -x "$CXX_BIN" || { echo "::error::missing $CXX_BIN"; exit 1; }
           {
             echo "ANDROID_NDK_HOME=$NDK"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_BIN"
             echo "CC_aarch64_linux_android=$CC_BIN"
+            echo "CXX_aarch64_linux_android=$CXX_BIN"
             echo "AR_aarch64_linux_android=$AR_BIN"
             echo "ABI_SLICE_NDK_BIN=$TOOLCHAIN/bin"
           } >> "$GITHUB_ENV"
+
+      # #40: the same assertion source under the cross compilers that actually
+      # build for device. Header drift that only the NDK layout catches must
+      # fail here, not on the phone. The compilers come from the step above so
+      # the NDK path and API level are spelled once (docs/GATES.md §3).
+      - name: C ABI layout — NDK C11
+        run: |
+          set -euo pipefail
+          "${CC_aarch64_linux_android:?not set}" \
+            -std=c11 -Iinclude -fsyntax-only include/abi_layout_check.c
+          echo "layout check: NDK c11 ok"
+
+      - name: C ABI layout — NDK C++17
+        run: |
+          set -euo pipefail
+          "${CXX_aarch64_linux_android:?not set}" \
+            -std=c++17 -Iinclude -fsyntax-only include/abi_layout_check.c
+          echo "layout check: NDK c++17 ok"
 
       - name: Build nvn_host for aarch64-linux-android
         working-directory: spike/abi-slice
