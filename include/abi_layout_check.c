@@ -20,7 +20,7 @@
 #endif
 
 /* ---- nva_mem_region: 104 B ---- */
-NVA_SA(sizeof(nva_mem_region) == 100, "nva_mem_region size");
+NVA_SA(sizeof(nva_mem_region) == 104, "nva_mem_region size");
 NVA_SA(offsetof(nva_mem_region, guest_va) == 8, "guest_va");
 NVA_SA(offsetof(nva_mem_region, size_bytes) == 16, "size_bytes");
 NVA_SA(offsetof(nva_mem_region, kind) == 24, "kind");
