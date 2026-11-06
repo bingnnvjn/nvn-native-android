@@ -1,8 +1,8 @@
 {
   "version": 1,
   "source": {
-    "protos": "work/research/refs/d2r/nvn_protos.h",
-    "slots": "work/research/refs/d2r/nvn_slots.tsv"
+    "protos": "d2r nvn_protos.h (local reference, not in repo)",
+    "slots": "d2r nvn_slots.tsv (local reference, not in repo)"
   },
   "slots": [
     {

@@ -81,8 +81,8 @@ SUMMARY {"mode":"gate","ok":true,"assertions":10,...}
 
 ## Research facts used for the stub rules
 
-From `work/research/refs/d2r/nvn_protos.h` (477 typedefs) and
-`nvn_slots.tsv` (523 rows):
+From the local d2r reference `nvn_protos.h` (477 typedefs, not in repo) and
+`nvn_slots.tsv` (523 rows, not in repo):
 
 - 316 void, 44 `NVNboolean` (8-bit in the SDK header), 21 int, 18 size_t,
   12 ptrdiff_t, 5 float, 10 pointer returns, 5 struct-by-value returns
