@@ -1,0 +1,25 @@
+# Product workspace. Exactly five members (#39, docs/GATES.md §2.1).
+#
+# spike/abi-slice is deliberately not a member: it is a standalone package with
+# its own Cargo.lock, and the spike CI legs build it from its own directory.
+# Without this exclude, a root workspace would make `cargo build` inside the
+# spike fail with "current package believes it's in a workspace when it's not".
+[workspace]
+resolver = "2"
+members = [
+    "crates/nva-abi",
+    "crates/nva-pack",
+    "crates/nva-rewrite",
+    "crates/nva-verify",
+    "crates/nva-runtime",
+]
+exclude = ["spike/abi-slice"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# C ABI v1 invariant (docs/ARCHITECTURE.md §7.4): no unwind across FFI.
+[profile.release]
+panic = "abort"

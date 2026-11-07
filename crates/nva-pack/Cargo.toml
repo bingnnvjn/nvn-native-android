@@ -1,0 +1,6 @@
+[package]
+name = "nva-pack"
+description = "L0 container/extract tool for import packs (skeleton only)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Product shell manifest (#46).
+
+  Only what #46 asks for: the product package name, minSdk 26, and no
+  debuggable attribute (docs/GATES.md §3 wants it absent; an absent attribute
+  is the platform default `false`). targetSdk stays at 34 because #37 D15 says
+  this ticket only switches the package name and `debuggable`; 36 is an L6
+  decision (docs/PIPELINE.md §4.2).
+
+  No permissions yet: the L6 whitelist (SAF import + the two foreground-service
+  permissions) arrives with the code that needs it. ci/guard/check_manifest.sh
+  runs in product mode and rejects anything outside that whitelist.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.bingnnvjn.nva">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+    <application
+        android:label="NVA"
+        android:extractNativeLibs="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

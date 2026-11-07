@@ -1,7 +1,7 @@
 # 里程碑门（M0–M3）
 
 > 来源：#22（评论为指针，本文件为权威正文）。证据全私有，见 #33。
-> 版本：v4（2026-10-31）。v1–v3 均经两遍审查；本版修的是「规格 vs 可执行物」的先后。
+> 版本：v9（2026-11-07）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动；v7 只改 §3 变异测试的措辞并在 §9 记一条缺口，判据值不动；v8 只把 §3/§8 的旧字段名换成实际输出名 `validation_errors`（#48），判据值不动；v9 补布局断言清单守卫（#49），§3 变异测试回到「删一条 `_Static_assert`」，§9 把那条缺口换成更窄的一条（守条数，不守断言内容），判据值不动。
 > 依据：#20（L0–L6 + C ABI v1）、#21（流水线）、#30（真机竖切）、#31（validation）、#33（公开边界）。
 
 ## 0. 效度边界
@@ -39,12 +39,12 @@
 - **APK 壳不是 cargo 成员**（Kotlin/JNI，`aapt2`/`d8`/`apksigner` 构建），单独断言。
 - `ci/fixtures/pack-min`、`ci/fixtures/rewrite-min`（含 shader cache，`degraded` 为空）。
 - `nva-verify` 子命令：`rewrite`、`loadplan`、`shader`、`hle`、`device`、`smoke`。
-- `shell-apk` job 启用并入 `gate.needs`；其 `dm/`、`ci/dmgendir` 替身先补（`PIPELINE.md` §10）。
+- `shell-apk` job 已启用并入 `gate.needs`（#46）；壳走 spike 跑通的无 Gradle 路径（`aapt2`/`d8`/`apksigner`），不需要 `dm/`、`ci/dmgendir` 替身（`PIPELINE.md` §10）。
 
 ### 2.2 头文件
 
 - 产品头保持 `include/nva_abi.h`。
-- **spike 头改名为 `nva_abi_spike.h`**，并更新 spike 的 include；不保留同名文件（同名加 `#error` 会打断 spike 构建）。CI 断言 spike 树里不存在 `nva_abi.h`。
+- **spike 的 `include/nva_abi.h` / `abi_layout_check.c` 改名为 `nva_abi_spike.h` / `abi_layout_check_spike.c`**，并更新 spike 的 include；不保留同名文件（同名加 `#error` 会打断 spike 构建）。CI 断言（`guard` job，`check_header_collision.sh`）spike 树里不存在与产品 `include/` 同名的文件。
 
 ### 2.3 设备侧
 
@@ -77,6 +77,8 @@ cc  -std=c11   -Iinclude -fsyntax-only include/abi_layout_check.c
 c++ -std=c++17 -Iinclude -fsyntax-only include/abi_layout_check.c
 "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" \
     -std=c11 -Iinclude -fsyntax-only include/abi_layout_check.c
+"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" \
+    -std=c++17 -Iinclude -fsyntax-only include/abi_layout_check.c
 [ "$(cargo metadata --no-deps --format-version 1 | jq '.packages | length')" = "5" ]
 cargo build --workspace --release
 cargo test -p nva-abi -- --exact layout_sizes | tee t.log; grep -q '1 passed' t.log
@@ -84,16 +86,16 @@ cargo run -p nva-verify -- loadplan --fixture ci/fixtures/pack-min
 cargo run -p nva-verify -- smoke --headless --frames 1 --json smoke.json
 rg -q '"device_name" *: *"[^"]*llvmpipe' smoke.json      # #30：lavapipe 的 deviceName 是 llvmpipe
 rg -q '"pixel_rgba" *: *"0xff00ff00"' smoke.json
-rg -q '"vk_errors" *: *0' smoke.json
+rg -q '"validation_errors" *: *0' smoke.json
 for p in nva_app_ nva_gfx_ nva_host_; do
   [ "$(nm -D target/release/libnva_runtime.so | rg -c " $p")" -ge 1 ]
 done
 ```
 
-- 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。
-- spike 树不含 `nva_abi.h`（见 §2.2）。
-- 以上并入 `pc-x86_64`，其失败必须让 `gate` 红。
-- **变异测试**：删一条 `_Static_assert`、删一个 workspace 成员，各跑一次，CI 必须红；两次的 run id 记进台账。
+- 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。产品壳这两条在 `shell-apk` job 的 `ci/guard/check_shell_apk.sh`（#46）；spike 侧今天只有 `scan_apk.sh` 与 `check_manifest.sh`（artifact 模式，允许 debuggable），没有这两条断言。
+- spike 树不含与产品 `include/` 同名的文件（见 §2.2）；该断言在 `guard` job。
+- 布局断言四条全部进 CI：宿主 C11 / C++17 在 `pc-x86_64`，NDK C11 / C++17 在 `android-aarch64`；其余命令并入 `pc-x86_64`（#45 接线）；壳/APK 断言已就位（`shell-apk` 于 #46 启用并入 `gate.needs`）。任一条失败必须让 `gate` 红。
+- **变异测试**：删一条 `_Static_assert`、删一个 workspace 成员，各跑一次，CI 必须红；两次的 run id 记进台账。断言清单由 `guard` job 的 `check_layout_assertions.sh` 钉住（#49）：总数与每组条数逐项相等，期望值在 `ci/guard/layout-assertions.txt`，少一条即红。
 
 ## 4. M0b — 真机首帧门
 
@@ -201,7 +203,7 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - 输入三段：确认键（`M2-0`）→ overlay 摇杆/ABXY（`M2b`）→ 手柄（M3 之后）。
 - pack 上机：M1–M3 用 `nva-pack install`（adb，dev-only）；SAF 在 `M3b`。
 - `nva_stats` 追加：§2.4，由实现票做；落地后回填本文件与 `abi_layout_check.c`。
-- **#31**：不前置任何门；每门记 `validation_available` 与 `vk_errors`；到 M2 末未关则按 #31 路径 3 收口，附失败命令、loader 版本、logcat 哈希。
+- **#31**：不前置任何门；每门记 `validation_available` 与 `validation_errors`；到 M2 末未关则按 #31 路径 3 收口，附失败命令、loader 版本、logcat 哈希。
 - 证据：`PIPELINE.md:49` 的公开 evidence artifact 对产品门退役，只在 spike 保留；#33 定私有根路径。
 
 ## 9. 进门时仍存在的已知差距
@@ -211,7 +213,8 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - movie/codec 能否播未证（`M2a` 前置子门）。
 - 六份 `.bfttf` 已提取并记 hash，不进仓库。
 - 8 MRT ≤28 ms、present 延迟、16 KB page size、`LSE` 回退未实测。
-- `dm/` 与 `ci/dmgendir` 不在仓；`shell-apk` 启用需先补替身。
+- `dm/` 与 `ci/dmgendir` 不在仓；产品壳改走无 Gradle 路径（#46），不再需要这两个替身。d2r 血统壳若将来重提，仍需补。
+- 布局断言清单守卫只比条数与分组（#49）：把一条 `NVA_SA` 改成恒真、或用 `#if 0` 包住一段，条数不变即绿。它守「少一条」，不守「每条还有效」。
 
 ## 10. 变更记录
 
@@ -219,3 +222,8 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - v2：载体与退出码、M1 guest 证据、`M2-0`、720p 记录。
 - v3：修成员数与 fps 口径、注入块、身份现场取。
 - v4：承认「规格 ≠ 可执行物」；列出 §2.4 追加字段（ABI 追加票输入）；退出码改回 #20 语义；`pm path` 前缀、llvmpipe、spike 头改名；M1 用 `guest_svc_count ≥50` + `draw_caller_in_guest` 反回放；M3a 加帧数覆盖与现场读条件；M3b 五场景独立判据；恢复 `run_id`/`ts_utc` 与私有台账。
+- v5：M0a 布局断言补 NDK C++17 一条，四口径（C11 / C++17 × 宿主 / Android 交叉）齐全（#40）；§3 注明四条命令各落哪个 job。
+- v6：`shell-apk` 启用并入 `gate.needs`（#46），壳走无 Gradle 路径；§2.1/§3/§9 删掉「`dm/` 替身先补」「仍预留」的旧措辞。判据值不变。
+- v7：§3 变异测试的第 1 项改成「改一条 `_Static_assert` 使其失败」——按原措辞删一条断言不会红（#47 实测）；§9 记「无断言清单守卫」缺口。判据值不变。
+- v8：§3/§8 的旧字段名改成实际输出名 `validation_errors`（#48，D9）。判据值不变。
+- v9：布局断言清单守卫落地（#49）——`guard` job 新增 `check_layout_assertions.sh`，钉住 76 条与 11 个分组的逐项条数；§3 变异测试回到「删一条 `_Static_assert`」；§9 把「无断言清单守卫」换成更窄的一条（守条数，不守断言内容）；`README.md` 的 ABI 清单加 `ci/guard/layout-assertions.txt`。判据值不变。

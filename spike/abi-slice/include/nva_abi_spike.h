@@ -1,5 +1,5 @@
 /*
- * nva_abi.h — C ABI v1 subset exercised by the #30 ABI spike.
+ * nva_abi_spike.h — C ABI v1 subset exercised by the #30 ABI spike.
  *
  * This is deliberately NOT the full v1 header. It contains only the pieces the
  * spike needs, with the v1 field order/size kept byte-for-byte where they exist:

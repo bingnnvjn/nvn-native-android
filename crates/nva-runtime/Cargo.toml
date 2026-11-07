@@ -1,0 +1,18 @@
+[package]
+name = "nva-runtime"
+description = "Runtime that exports the product C ABI"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The shell links the runtime through the C ABI (docs/ARCHITECTURE.md §7.1).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Rust mirror of the product header: runtime, shell and verifier consume the
+# same layouts (#41).
+nva-abi = { path = "../nva-abi" }
+# Vulkan loader bindings (docs/ARCHITECTURE.md §3.6). `Entry::load()` failure is
+# the "oracle unavailable" path behind smoke exit code 3 (#37 D8).
+ash = "0.38"

@@ -21,7 +21,8 @@ cd "$(git rev-parse --show-toplevel)"
 ALLOWLIST=ci/guard/allowlist.txt
 [[ -f $ALLOWLIST ]] || { echo "guard: missing $ALLOWLIST" >&2; exit 2; }
 
-# Paths that may exceed the size gate, one glob per line (# comments ignored).
+# Paths registered as known exceptions: the size gate, the binary-blob gate and
+# the game-data name blacklist. One glob per line (# comments ignored).
 allowed() {
   local p=$1 line
   while IFS= read -r line; do
@@ -60,9 +61,11 @@ IS_PUBLISHED_ARTIFACT_KEY='^ci/signing/artifact\.p12$'
 scan_path() {
   local p=$1 where=$2
   [[ $p =~ $BANNED_EXT_RE ]] && report "$where: game/shader file: $p"
-  # ci/fixtures/ is synthetic by construction; its members carry real magic on
-  # purpose (to exercise the tools) and never game bytes.
-  [[ $p =~ $BANNED_FILE_RE && ! $p =~ ^ci/fixtures/ ]] && report "$where: game data path: $p"
+  # Fixture names are on the blacklist by shape. They are registered one path
+  # at a time in ci/guard/allowlist.txt; there is no directory-wide name
+  # exception. (scan_magic.py keeps its own fixture rule for synthetic magic;
+  # see docs/PIPELINE.md §7.)
+  [[ $p =~ $BANNED_FILE_RE ]] && ! allowed "$p" && report "$where: game data path: $p"
   [[ $p =~ $BANNED_DIR_RE ]] && report "$where: extracted game tree: $p"
   if [[ $p =~ $PRIVATE_KEY_RE && ! $p =~ $IS_PUBLISHED_ARTIFACT_KEY ]] && ! allowed "$p"; then
     report "$where: private key material: $p ($(printf '%s' "$p" | wc -c) chars)"

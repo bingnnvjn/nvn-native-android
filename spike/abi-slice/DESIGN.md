@@ -24,7 +24,7 @@ Two builds of the *same* code:
 spike/abi-slice/
   Cargo.toml
   build.rs                 # glslangValidator -> OUT_DIR/*.spv
-  include/nva_abi.h        # C ABI subset + spike hooks
+  include/nva_abi_spike.h  # C ABI subset + spike hooks
   include/nvn_guest.h      # spike-local NVN object layouts
   src/lib.rs               # engine, table, NVN impls, C ABI exports
   src/vk.rs                # ash offscreen clear/draw/fence/readback (owner: vk subagent)

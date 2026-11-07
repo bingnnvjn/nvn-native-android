@@ -1,0 +1,18 @@
+# Layout assertion inventory (#49). Counted from include/abi_layout_check.c.
+# Every NVA_SA line must belong to a group below; the total must match.
+# Format: one "<group> <count>" per line, plus the mandatory "total <n>" line.
+# Group names are single tokens (no spaces), and the count is per line.
+# If the ABI grows on purpose: bump the numbers here in the same commit
+# (README.md, "ABI change").
+total 76
+nva_mem_region 12
+nva_fence 3
+nva_host_services 6
+nva_shader_cache 3
+nva_gfx_desc 3
+nva_gfx_caps 3
+nva_stats 2
+NVN 17
+host 6
+平台壳 11
+SVC 10

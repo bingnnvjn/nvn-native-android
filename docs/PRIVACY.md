@@ -3,6 +3,14 @@
 > 来源：票 #33。状态：v1（2026-10-31）。
 > 依据：#22（里程碑证据全私有）、#16（公开边界）、#21（流水线）、#23（法律边界）、#31/#34（私有证据）。
 > 本文件只记录决定与清单。它不执行清理，不重写历史。清理见 #35。
+>
+> **2026-11-06 状态更新**：仓库已按「只留产品」整理，下文表格保留原始决定，不再逐行修订。
+> 已移出仓库（文件仍在本地根，不再跟踪）：`AGENTS.md`、`GLOSSARY.md`、
+> `CODING_STANDARDS.md`、`docs/{RISKS,device-adreno725,botw-assets,botw-nvn-usage,shared-fonts}.md`、
+> `docs/agents/`、`docs/adr/`。
+> 仓库现在只含：`crates/`、`include/`、`shell/`、`ci/`、`spike/abi-slice/`、`tools/mng/`、
+> `docs/{ARCHITECTURE,GATES,PIPELINE,PRIVACY,DERIVED,RELEASE-NOTES-TEMPLATE}.md`、
+> `LICENSE`、`NOTICE`、`README.md`。
 
 ## 0. 口径
 
@@ -40,13 +48,15 @@
 
 ### 1.3 私有
 
+以下路径相对本地根（`repo/` 的上一级）。
+
 | 类 | 内容 |
 |---|---|
 | 真机证据 | 截图、录像、logcat、JSON、trace、`work/evidence/*`；例外：3 张已公开的 png（Q5） |
 | 游戏素材 | XCI/NSP/NCA/NSO/keys/import pack/shader cache/字体/RomFS 索引；外置素材盘 |
 | 存档 | 游戏存档与导出 |
 | 真标识 | 真正的序列号、IMEI、Android ID、账号、邮箱、主机名 |
-| 含本机路径的笔记 | `work/` 草稿、`work/research`、`work/ctx`、`repo/research/r8` |
+| 含本机路径的笔记 | `work/` 草稿、`work/research`、`work/ctx`、`research/r8` |
 | 工作区根一次性材料 | `d2r-android-evidence.md`、`tmp-*.md`、`fonts/`、`research/` |
 | 构建产物与私有工作树 | `dist/`、`target/`、`apk-artifact/`、`apk-final/`、`work/tree-main` |
 | 未来的发布密钥 | `release.p12` 与发布签名 |

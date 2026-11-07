@@ -39,8 +39,6 @@ Read only what the task needs.
 - Release-notes template (when a release is eventually cut): `docs/RELEASE-NOTES-TEMPLATE.md`
 - ABI spike design: `spike/abi-slice/DESIGN.md`
 - ABI spike results: `spike/abi-slice/RESULTS.md`
-- Terms: `GLOSSARY.md`
-- Review rules: `CODING_STANDARDS.md`
 - Cheap checks: `spike/abi-slice/scripts/check.sh`
 - CI: `.github/workflows/ci.yml` (replaces `abi-slice.yml`)
 - Device: `spike/abi-slice/scripts/run_android.sh`
@@ -62,5 +60,12 @@ Long sessions can be audited with
 
 ## ABI change
 
-Read `CODING_STANDARDS.md` before you change `include/nva_abi.h`,
-`src/lib.rs` slot names, or `nvn-table.json`.
+Five files must stay in sync. If they drift, `check_table.py`,
+`check_header_collision.sh` or `check_layout_assertions.sh` fails the `guard`
+job:
+
+- `include/nva_abi.h`
+- `spike/abi-slice/include/nva_abi_spike.h`
+- `spike/abi-slice/src/lib.rs` (slot names)
+- `spike/abi-slice/nvn-table.json`
+- `ci/guard/layout-assertions.txt` (assertion count and per-group split; #49)

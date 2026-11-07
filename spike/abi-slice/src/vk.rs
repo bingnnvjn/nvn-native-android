@@ -635,22 +635,36 @@ unsafe fn has_instance_ext(entry: &ash::Entry, name: &CStr) -> bool {
 
 unsafe extern "system" fn debug_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-    _types: vk::DebugUtilsMessageTypeFlagsEXT,
+    types: vk::DebugUtilsMessageTypeFlagsEXT,
     data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     user_data: *mut c_void,
 ) -> vk::Bool32 {
-    if !user_data.is_null() {
+    let is_error = severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR);
+    let is_validation = types.contains(vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION);
+    let data = data.as_ref();
+    let id = data
+        .filter(|d| !d.p_message_id_name.is_null())
+        .map(|d| CStr::from_ptr(d.p_message_id_name).to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let msg = data
+        .filter(|d| !d.p_message.is_null())
+        .map(|d| CStr::from_ptr(d.p_message).to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // The Adreno driver reports VKDBGUTILWARN*/VKDBGUTILERR* through debug utils
+    // as an ERROR/VALIDATION message with an *empty* message id. Those are driver
+    // hints, not validation-layer findings: log them, but never count them in
+    // `validation_errors`.
+    let driver_message = id.starts_with("VKDBGUTIL") || msg.contains("VKDBGUTIL");
+    let validation_error = is_error && is_validation && !driver_message;
+    if validation_error && !user_data.is_null() {
         let count = &*(user_data as *const AtomicU32);
-        if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
-            count.fetch_add(1, Ordering::Relaxed);
-        }
+        count.fetch_add(1, Ordering::Relaxed);
     }
-    if let Some(data) = data.as_ref() {
-        if !data.p_message.is_null() {
-            let msg = CStr::from_ptr(data.p_message).to_string_lossy();
-            if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
-                eprintln!("[vk validation ERROR] {msg}");
-            }
+    if !msg.is_empty() {
+        if validation_error {
+            eprintln!("[vk validation ERROR] {id}: {msg}");
+        } else {
+            eprintln!("[vk driver msg] {id}: {msg}");
         }
     }
     vk::FALSE
