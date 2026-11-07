@@ -8,6 +8,7 @@
 resolver = "2"
 members = [
     "crates/nva-abi",
+    "crates/nva-pack",
     "crates/nva-rewrite",
     "crates/nva-verify",
     "crates/nva-runtime",
