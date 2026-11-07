@@ -59,6 +59,12 @@ jobs:
       - name: Check spike tree shares no product header names
         run: bash ci/guard/check_header_collision.sh
 
+      # #49: the four layout compiles (GATES §3) can prove the remaining
+      # assertions hold; they cannot see one that was deleted. This pins the
+      # inventory of NVA_SA lines. No compiler needed, so it lives here.
+      - name: Check layout assertion inventory (#49)
+        run: bash ci/guard/check_layout_assertions.sh
+
       - name: Check doc cross-references
         run: python3 ci/guard/check_doc_refs.py
 

@@ -224,6 +224,84 @@ rm -f "$WS/.cargo/config.toml"
 rmdir "$WS/.cargo"
 expect_rc 0 run_workspace_gate
 
+# --- check_layout_assertions.sh (#49) -------------------------------------
+# include/abi_layout_check.c holds the only compile-time pin on C ABI v1;
+# deleting one assertion used to leave CI green (#47). Every case runs in a
+# temp tree on purpose: during the counter-proof run the real tree is one
+# assertion short, and a "real tree passes" case here would move that red onto
+# this step instead of the inventory step.
+LAY=$TMP/layout
+mkdir -p "$LAY/include"
+LAY_SRC=$LAY/include/abi_layout_check.c
+LAY_EXPECT=$TMP/layout-expect.txt
+run_layout() { bash ci/guard/check_layout_assertions.sh "$LAY" "$LAY_EXPECT"; }
+
+# Three assertions in two groups. The fence header carries a note after ':'
+# like the real file, and the label must still be read as `nva_fence`.
+cat >"$LAY_SRC" <<'EOF'
+/* ---- nva_fence: 16 B ---- */
+NVA_SA(sizeof(nva_fence) == 16, "nva_fence size");
+NVA_SA(offsetof(nva_fence, gen) == 12, "fence gen");
+/* ---- SVC ---- */
+NVA_SA(sizeof(nva_svc_frame) == 96, "svc_frame size");
+EOF
+printf 'total 3\nnva_fence 2\nSVC 1\n' >"$LAY_EXPECT"
+expect_rc 0 run_layout
+
+# One assertion gone: the total and its group drop together.
+cat >"$LAY_SRC" <<'EOF'
+/* ---- nva_fence: 16 B ---- */
+NVA_SA(sizeof(nva_fence) == 16, "nva_fence size");
+/* ---- SVC ---- */
+NVA_SA(sizeof(nva_svc_frame) == 96, "svc_frame size");
+EOF
+expect_rc 1 run_layout
+
+# Total unchanged, one group emptied into another: only the per-group split
+# catches this, which is why equality is exact rather than "at least one".
+cat >"$LAY_SRC" <<'EOF'
+/* ---- nva_fence: 16 B ---- */
+NVA_SA(sizeof(nva_fence) == 16, "nva_fence size");
+NVA_SA(offsetof(nva_fence, gen) == 12, "fence gen");
+NVA_SA(sizeof(nva_svc_frame) == 96, "svc_frame size");
+/* ---- SVC ---- */
+EOF
+expect_rc 1 run_layout
+
+# An assertion above the first header belongs to no group.
+cat >"$LAY_SRC" <<'EOF'
+NVA_SA(offsetof(nva_fence, gen) == 12, "fence gen");
+/* ---- nva_fence: 16 B ---- */
+NVA_SA(sizeof(nva_fence) == 16, "nva_fence size");
+NVA_SA(offsetof(nva_fence, gen) == 12, "fence gen");
+/* ---- SVC ---- */
+NVA_SA(sizeof(nva_svc_frame) == 96, "svc_frame size");
+EOF
+expect_rc 1 run_layout
+
+# Same source, an inventory whose total and groups all match: the orphan rule
+# alone must still fail, or "every assertion belongs to a group" is untested.
+printf 'total 4\nnva_fence 2\nSVC 1\n' >"$TMP/layout-expect-orphan.txt"
+expect_rc 1 bash ci/guard/check_layout_assertions.sh "$LAY" "$TMP/layout-expect-orphan.txt"
+
+# A group the inventory never heard of fails on its own, with the total and
+# every listed group matching.
+cat >"$LAY_SRC" <<'EOF'
+/* ---- nva_fence: 16 B ---- */
+NVA_SA(sizeof(nva_fence) == 16, "nva_fence size");
+NVA_SA(offsetof(nva_fence, gen) == 12, "fence gen");
+/* ---- SVC ---- */
+NVA_SA(sizeof(nva_svc_frame) == 96, "svc_frame size");
+EOF
+printf 'total 3\nnva_fence 2\n' >"$TMP/layout-expect-partial.txt"
+expect_rc 1 bash ci/guard/check_layout_assertions.sh "$LAY" "$TMP/layout-expect-partial.txt"
+
+# Bad input is exit 2, not a silent pass.
+rm "$LAY_SRC"
+expect_rc 2 run_layout
+expect_rc 2 bash ci/guard/check_layout_assertions.sh "$LAY" "$TMP/no-such-expect.txt"
+expect_rc 2 bash ci/guard/check_layout_assertions.sh "$TMP/no-such-root" "$LAY_EXPECT"
+
 # --- check_doc_refs.py -----------------------------------------------------
 # A stale `GATES §x.y` must fail; a valid alias and full-path ref must pass.
 DOCS_REPO=$TMP/docrefs
