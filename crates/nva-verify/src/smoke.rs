@@ -15,8 +15,8 @@ use core::ptr;
 use std::ffi::{CStr, CString};
 
 use nva_abi::{
-    nva_fence, nva_gfx_desc, nva_host_services, nva_mem_region, nva_stats,
-    NVA_ERR_UNSUPPORTED, NVA_GFX_DESC_VERSION, NVA_HOST_SERVICES_VERSION, NVA_OK, NVA_STATS_VERSION,
+    nva_fence, nva_gfx_desc, nva_host_services, nva_mem_region, nva_stats, NVA_ERR_UNSUPPORTED,
+    NVA_GFX_DESC_VERSION, NVA_HOST_SERVICES_VERSION, NVA_OK, NVA_STATS_VERSION,
 };
 use nva_runtime::verify::nva_verify_state;
 
@@ -157,8 +157,7 @@ pub fn run(options: &Options) -> Outcome {
         submit,
         finish,
     ]
-    .iter()
-    .any(|address| *address == 0)
+    .contains(&0)
     {
         unsafe { nva_gfx_destroy(gfx) };
         return failure(EXIT_MISMATCH, "smoke: an NVN entry point did not resolve");

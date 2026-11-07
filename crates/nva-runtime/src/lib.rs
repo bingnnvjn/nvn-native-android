@@ -22,8 +22,8 @@ use nva_abi::{
 };
 
 pub mod debug_filter;
-mod vk;
 pub mod verify;
+mod vk;
 
 use verify::nva_verify_state;
 use vk::{CreateError, Vk, WaitError};
@@ -332,17 +332,12 @@ fn nvn_entry(name: &str) -> Option<u64> {
 }
 
 unsafe extern "C" fn nvn_device_builder_set_defaults(builder: *mut c_void) {
-    if builder.is_null() {
-        return;
-    }
+    if builder.is_null() {}
     // The builder is opaque to the runtime in this ticket; a real default set
     // lands with the NVN object model.
 }
 
-unsafe extern "C" fn nvn_device_initialize(
-    device: *mut c_void,
-    builder: *const c_void,
-) -> u8 {
+unsafe extern "C" fn nvn_device_initialize(device: *mut c_void, builder: *const c_void) -> u8 {
     if device.is_null() || builder.is_null() {
         return 0;
     }
@@ -358,7 +353,9 @@ unsafe extern "C" fn nvn_command_buffer_clear_color(
     if command_buffer.is_null() || color.is_null() {
         return;
     }
-    let mut pending = PENDING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut pending = PENDING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     pending.clear_rgba = [*color, *color.add(1), *color.add(2), *color.add(3)];
 }
 
@@ -371,7 +368,9 @@ unsafe extern "C" fn nvn_command_buffer_draw_arrays(
     if command_buffer.is_null() {
         return;
     }
-    let mut pending = PENDING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut pending = PENDING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     pending.draw_vertices = count.max(0) as u32;
 }
 
@@ -388,7 +387,9 @@ unsafe extern "C" fn nvn_queue_submit_commands(
         return;
     }
     let (clear_rgba, draw_vertices) = {
-        let pending = PENDING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pending = PENDING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         (pending.clear_rgba, pending.draw_vertices)
     };
     let gfx = &mut *gfx;

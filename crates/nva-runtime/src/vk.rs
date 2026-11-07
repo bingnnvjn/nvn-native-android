@@ -90,9 +90,8 @@ impl Vk {
     }
 
     unsafe fn new_unsafe() -> Result<Self, CreateError> {
-        let entry = ash::Entry::load().map_err(|e| {
-            CreateError::OracleUnavailable(format!("load libvulkan: {e}"))
-        })?;
+        let entry = ash::Entry::load()
+            .map_err(|e| CreateError::OracleUnavailable(format!("load libvulkan: {e}")))?;
 
         let layer_available = has_layer(&entry, VALIDATION_LAYER);
         let debug_ext_available =
@@ -145,8 +144,7 @@ impl Vk {
                     )
                     .pfn_user_callback(Some(debug_callback))
                     .user_data(Arc::as_ptr(&validation_errors) as *mut c_void);
-                du.create_debug_utils_messenger(&callback_info, None)
-                    .ok()
+                du.create_debug_utils_messenger(&callback_info, None).ok()
             }
             None => None,
         };
@@ -155,9 +153,9 @@ impl Vk {
         // say "unavailable" and exit 3, never "clean".
         let validation_available = debug_ext_available && debug_messenger.is_some();
 
-        let physical_devices = instance
-            .enumerate_physical_devices()
-            .map_err(|e| CreateError::OracleUnavailable(format!("vkEnumeratePhysicalDevices: {e}")))?;
+        let physical_devices = instance.enumerate_physical_devices().map_err(|e| {
+            CreateError::OracleUnavailable(format!("vkEnumeratePhysicalDevices: {e}"))
+        })?;
         if physical_devices.is_empty() {
             return Err(CreateError::OracleUnavailable(
                 "no Vulkan physical device".into(),
@@ -190,7 +188,8 @@ impl Vk {
         let device = instance
             .create_device(
                 physical,
-                &vk::DeviceCreateInfo::default().queue_create_infos(std::slice::from_ref(&queue_info)),
+                &vk::DeviceCreateInfo::default()
+                    .queue_create_infos(std::slice::from_ref(&queue_info)),
                 None,
             )
             .map_err(|e| CreateError::OracleUnavailable(format!("vkCreateDevice: {e}")))?;
@@ -213,7 +212,9 @@ impl Vk {
                     .array_layers(1)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
-                    .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
+                    .usage(
+                        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+                    )
                     .sharing_mode(vk::SharingMode::EXCLUSIVE)
                     .initial_layout(vk::ImageLayout::UNDEFINED),
                 None,
@@ -575,8 +576,8 @@ impl Vk {
                 .end_command_buffer(self.command_buffer)
                 .map_err(|e| format!("vkEndCommandBuffer: {e}"))?;
 
-            let submit_info =
-                vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&self.command_buffer));
+            let submit_info = vk::SubmitInfo::default()
+                .command_buffers(std::slice::from_ref(&self.command_buffer));
             self.device
                 .queue_submit(self.queue, std::slice::from_ref(&submit_info), self.fence)
                 .map_err(|e| format!("vkQueueSubmit: {e}"))?;
@@ -630,7 +631,8 @@ impl Drop for Vk {
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_pipeline(self.pipeline, None);
-            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_shader_module(self.vert_module, None);
             self.device.destroy_shader_module(self.frag_module, None);
             self.device.destroy_framebuffer(self.framebuffer, None);
@@ -656,11 +658,7 @@ fn read_spirv(bytes: &[u8]) -> Result<Vec<u32>, CreateError> {
 }
 
 fn device_name_string(name: &[c_char]) -> String {
-    unsafe {
-        CStr::from_ptr(name.as_ptr())
-            .to_string_lossy()
-            .into_owned()
-    }
+    unsafe { CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned() }
 }
 
 fn find_memory_type(
