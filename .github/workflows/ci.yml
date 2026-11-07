@@ -158,6 +158,17 @@ jobs:
       - name: Lint guard scripts
         run: shellcheck -S warning ci/guard/*.sh shell/android/*.sh
 
+      # #55: the style gate from #53, wired where cargo already runs. Two steps,
+      # one script, two modes -- the local shell runs the same file. No job of
+      # its own and no gate.needs change: a red here fails pc-x86_64, which
+      # `gate` already aggregates. glslang is installed above, so the runtime
+      # build script must not need NVA_SKIP_SHADERS here.
+      - name: Style gate — rustfmt
+        run: bash ci/guard/check_style.sh fmt
+
+      - name: Style gate — clippy
+        run: bash ci/guard/check_style.sh clippy
+
       # #45: the M0a product gate (docs/GATES.md §3). Until now no CI job built
       # the five-crate product workspace or ran its smoke: the PC leg only built
       # the spike tree. Every command below asserts output under `set -euo
