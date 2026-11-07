@@ -145,8 +145,8 @@ jobs:
             . "$HOME/.cargo/env"
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.97.1
+          rustup default 1.97.1
           cargo --version
           rustc --version
 
@@ -333,8 +333,8 @@ jobs:
             . "$HOME/.cargo/env"
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.97.1
+          rustup default 1.97.1
 
       - name: Build nvn_host (+reserve-x18)
         working-directory: spike/abi-slice
@@ -457,8 +457,8 @@ jobs:
             . "$HOME/.cargo/env"
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.97.1
+          rustup default 1.97.1
           rustup target add aarch64-linux-android
 
       - name: Set up Android NDK (r27d)
@@ -697,8 +697,8 @@ jobs:
             . "$HOME/.cargo/env"
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.97.1
+          rustup default 1.97.1
 
       - name: Synthetic fixtures only — no --xci, no --keys
         run: |
