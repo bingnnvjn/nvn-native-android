@@ -60,10 +60,12 @@ Long sessions can be audited with
 
 ## ABI change
 
-Four files must stay in sync. If they drift, `check_table.py` or
-`check_header_collision.sh` fails the `guard` job:
+Five files must stay in sync. If they drift, `check_table.py`,
+`check_header_collision.sh` or `check_layout_assertions.sh` fails the `guard`
+job:
 
 - `include/nva_abi.h`
 - `spike/abi-slice/include/nva_abi_spike.h`
 - `spike/abi-slice/src/lib.rs` (slot names)
 - `spike/abi-slice/nvn-table.json`
+- `ci/guard/layout-assertions.txt` (assertion count and per-group split; #49)

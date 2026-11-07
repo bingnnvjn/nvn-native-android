@@ -302,6 +302,19 @@ expect_rc 2 run_layout
 expect_rc 2 bash ci/guard/check_layout_assertions.sh "$LAY" "$TMP/no-such-expect.txt"
 expect_rc 2 bash ci/guard/check_layout_assertions.sh "$TMP/no-such-root" "$LAY_EXPECT"
 
+# The `total` line is the only thing that checks the headline number, and
+# per-group equality alone would still pass without it: a file that lost that
+# line is broken input, not drift.
+cat >"$LAY_SRC" <<'EOF'
+/* ---- nva_fence: 16 B ---- */
+NVA_SA(sizeof(nva_fence) == 16, "nva_fence size");
+NVA_SA(offsetof(nva_fence, gen) == 12, "fence gen");
+/* ---- SVC ---- */
+NVA_SA(sizeof(nva_svc_frame) == 96, "svc_frame size");
+EOF
+printf 'nva_fence 2\nSVC 1\n' >"$TMP/layout-expect-no-total.txt"
+expect_rc 2 bash ci/guard/check_layout_assertions.sh "$LAY" "$TMP/layout-expect-no-total.txt"
+
 # --- check_doc_refs.py -----------------------------------------------------
 # A stale `GATES §x.y` must fail; a valid alias and full-path ref must pass.
 DOCS_REPO=$TMP/docrefs

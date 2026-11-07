@@ -8,7 +8,7 @@
 # This guard pins the total and the per-group split. The expected numbers live
 # in layout-assertions.txt next to this script: an ABI append then changes data
 # rather than shell code, and the diff reads "76 -> 77, nva_stats 2 -> 11"
-# (CODING_STANDARDS.md, "ABI change").
+# (README.md, "ABI change").
 #
 # Usage: check_layout_assertions.sh [REPO_ROOT] [EXPECT_FILE]
 # Exit codes: 0 clean, 1 inventory drift, 2 bad input (root/file/expect).
@@ -33,9 +33,9 @@ if [[ ! -d $root ]]; then
   exit 2
 fi
 
-expect=${2:-$here/layout-assertions.txt}
-if [[ ! -f $expect ]]; then
-  echo "check_layout_assertions: no expectation file: $expect" >&2
+expect_file=${2:-$here/layout-assertions.txt}
+if [[ ! -f $expect_file ]]; then
+  echo "check_layout_assertions: no expectation file: $expect_file" >&2
   exit 2
 fi
 
@@ -80,12 +80,14 @@ actual_total=$(awk '$1 == "total" { print $2 }' <<<"$actual")
 actual_groups=$(awk '$1 == "groups" { print $2 }' <<<"$actual")
 
 drift=0
+saw_total=0
 declare -A pinned=()
 while read -r key n; do
   case $key in
     '' | '#'*) continue ;;
   esac
   if [[ $key == total ]]; then
+    saw_total=1
     if [[ $actual_total != "$n" ]]; then
       printf 'LAYOUT-INVENTORY: %s has %s assertions, expected %s\n' "$src" "$actual_total" "$n" >&2
       drift=1
@@ -101,10 +103,18 @@ while read -r key n; do
     printf 'LAYOUT-INVENTORY: group %s has %s assertions, expected %s\n' "$key" "$got" "$n" >&2
     drift=1
   fi
-done <"$expect"
+done <"$expect_file"
+
+# The `total` line is what a reader diffs first ("76 -> 77"); per-group equality
+# already implies it, so a missing line would drop the check without any group
+# going red. That is a broken inventory file, not drift: exit 2.
+if ((!saw_total)); then
+  echo "check_layout_assertions: $expect_file has no \"total\" line — refusing to pass" >&2
+  exit 2
+fi
 
 # Equality is exact per group on purpose: a group emptied into another group
-# leaves the total intact, and only the split catches that (#49 §3.1).
+# leaves the total intact, and only the split catches that.
 while read -r _ name count; do
   if [[ -z ${pinned[$name]:-} ]]; then
     printf 'LAYOUT-INVENTORY: group %s has %s assertions but is not in the inventory\n' \
@@ -124,7 +134,7 @@ fi
 if ((drift)); then
   echo "check_layout_assertions: FAILED — this is an inventory change, not a compile error." >&2
   echo "If the ABI grew on purpose, update ci/guard/layout-assertions.txt in the same" >&2
-  echo "commit and say so in the message (#49, CODING_STANDARDS.md \"ABI change\")." >&2
+  echo "commit (README.md, \"ABI change\"; #49)." >&2
   exit 1
 fi
 
