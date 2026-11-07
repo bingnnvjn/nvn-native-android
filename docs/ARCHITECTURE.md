@@ -116,7 +116,7 @@ L3 加载器把代码装进内存并跳 entry；L0/L2 是构建期，不在手�
 - **记录/重放**：记录期只解码不可变小状态；`nvnQueueSubmitCommands` 在调用线程同步重放，单把重放锁；两级 `PassCompatKey`/`PassKey` + `FramebufferKey` + `PipelineKey`（不含 viewport/scissor 值）；8 色槽固定，未用槽 `VK_ATTACHMENT_UNUSED`，framebuffer 仍需 8 个合法 view。
 - **内存/同步**：GPU 内存 copy-first；guest VA 永不进 `vkCmd*`/descriptor/shader，只接受 `(object, offset, length)`；`nva_mem_query` 是唯一 region 解析入口；`nva_fence{serial,domain,gen}`，设备丢失唤醒 `DEVICE_LOST`/`STALE`。present = window texture mirror → blit → swapchain。
 - **Vulkan 1.1**：725 实测 1.1.128、`maxViewports=1`、无 `conditional_rendering`/`dynamic_rendering`/`memory_budget`、无 int64/float64、BC/ASTC/BDA 可用；条件渲染用 occlusion query + 主机端判定；经典 render pass + framebuffer。
-- **验证**：725 真机 `all` 9/9、`gate` 10/10、`abort` 子进程 SIGABRT=6；lavapipe validation 干净；真机无 validation layer（#31）；8 MRT ≤28 ms；100 次 attach/detach 无泄漏；device-lost 注入能唤醒等待；首里程碑 = **725 第一帧**（像素/fence/`vk_errors`/帧时间基线），不是 60 fps。
+- **验证**：725 真机 `all` 9/9、`gate` 10/10、`abort` 子进程 SIGABRT=6；lavapipe validation 干净；真机无 validation layer（#31）；8 MRT ≤28 ms；100 次 attach/detach 无泄漏；device-lost 注入能唤醒等待；首里程碑 = **725 第一帧**（像素/fence/`validation_errors`/帧时间基线），不是 60 fps。
 
 ### 3.7 L6 平台壳
 

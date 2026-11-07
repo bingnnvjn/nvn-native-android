@@ -1,7 +1,7 @@
 # 里程碑门（M0–M3）
 
 > 来源：#22（评论为指针，本文件为权威正文）。证据全私有，见 #33。
-> 版本：v7（2026-11-07）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动；v7 只改 §3 变异测试的措辞并在 §9 记一条缺口，判据值不动。
+> 版本：v8（2026-11-07）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动；v7 只改 §3 变异测试的措辞并在 §9 记一条缺口，判据值不动；v8 只把 §3/§8 的旧字段名换成实际输出名 `validation_errors`（#48），判据值不动。
 > 依据：#20（L0–L6 + C ABI v1）、#21（流水线）、#30（真机竖切）、#31（validation）、#33（公开边界）。
 
 ## 0. 效度边界
@@ -86,7 +86,7 @@ cargo run -p nva-verify -- loadplan --fixture ci/fixtures/pack-min
 cargo run -p nva-verify -- smoke --headless --frames 1 --json smoke.json
 rg -q '"device_name" *: *"[^"]*llvmpipe' smoke.json      # #30：lavapipe 的 deviceName 是 llvmpipe
 rg -q '"pixel_rgba" *: *"0xff00ff00"' smoke.json
-rg -q '"vk_errors" *: *0' smoke.json
+rg -q '"validation_errors" *: *0' smoke.json
 for p in nva_app_ nva_gfx_ nva_host_; do
   [ "$(nm -D target/release/libnva_runtime.so | rg -c " $p")" -ge 1 ]
 done
@@ -203,7 +203,7 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - 输入三段：确认键（`M2-0`）→ overlay 摇杆/ABXY（`M2b`）→ 手柄（M3 之后）。
 - pack 上机：M1–M3 用 `nva-pack install`（adb，dev-only）；SAF 在 `M3b`。
 - `nva_stats` 追加：§2.4，由实现票做；落地后回填本文件与 `abi_layout_check.c`。
-- **#31**：不前置任何门；每门记 `validation_available` 与 `vk_errors`；到 M2 末未关则按 #31 路径 3 收口，附失败命令、loader 版本、logcat 哈希。
+- **#31**：不前置任何门；每门记 `validation_available` 与 `validation_errors`；到 M2 末未关则按 #31 路径 3 收口，附失败命令、loader 版本、logcat 哈希。
 - 证据：`PIPELINE.md:49` 的公开 evidence artifact 对产品门退役，只在 spike 保留；#33 定私有根路径。
 
 ## 9. 进门时仍存在的已知差距
@@ -225,3 +225,4 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - v5：M0a 布局断言补 NDK C++17 一条，四口径（C11 / C++17 × 宿主 / Android 交叉）齐全（#40）；§3 注明四条命令各落哪个 job。
 - v6：`shell-apk` 启用并入 `gate.needs`（#46），壳走无 Gradle 路径；§2.1/§3/§9 删掉「`dm/` 替身先补」「仍预留」的旧措辞。判据值不变。
 - v7：§3 变异测试的第 1 项改成「改一条 `_Static_assert` 使其失败」——按原措辞删一条断言不会红（#47 实测）；§9 记「无断言清单守卫」缺口。判据值不变。
+- v8：§3/§8 的旧字段名改成实际输出名 `validation_errors`（#48，D9）。判据值不变。
