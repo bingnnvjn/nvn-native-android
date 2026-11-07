@@ -82,6 +82,7 @@ enum { NVA_MEM_MAP_NONE = 0, NVA_MEM_MAP_CPU = 1, NVA_MEM_MAP_GPU = 2, NVA_MEM_M
 typedef struct nva_fence {               /* 16 B */
     uint64_t serial;
     uint32_t domain, gen;
+    uint32_t pad;
 } nva_fence;
 #define NVA_FENCE_VERSION 1u
 
