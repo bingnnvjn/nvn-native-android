@@ -340,4 +340,36 @@ printf 'not an apk\n' >"$TMP/fake.apk"
 expect_rc 2 env ANDROID_HOME=/nonexistent SHELL_NDK_BIN=/nonexistent \
   bash ci/guard/check_shell_apk.sh "$TMP/fake.apk"
 
+# --- check_style.sh (#53) --------------------------------------------------
+# The gate must be able to fail. guard has no Rust toolchain, so a stub cargo
+# stands in through NVA_CARGO -- same injection idea as check_workspace.sh.
+stub_cargo() {
+  local fmt_rc=$1 clippy_rc=$2
+  cat >"$TMP/cargo" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  fmt)    exit $fmt_rc ;;
+  clippy) exit $clippy_rc ;;
+  *)      echo "unexpected cargo args: \$*" >&2; exit 9 ;;
+esac
+EOF
+  chmod +x "$TMP/cargo"
+}
+run_style() { NVA_CARGO="$TMP/cargo" bash ci/guard/check_style.sh "$@"; }
+
+stub_cargo 0 0
+expect_rc 0 run_style
+expect_rc 0 run_style fmt
+expect_rc 0 run_style clippy
+
+stub_cargo 1 0
+expect_rc 1 run_style all
+expect_rc 1 run_style fmt
+
+stub_cargo 0 1
+expect_rc 1 run_style all
+expect_rc 1 run_style clippy
+
+expect_rc 2 run_style bogus
+
 echo "guard self-tests OK"
