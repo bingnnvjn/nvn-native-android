@@ -23,9 +23,7 @@ pub fn counts_as_validation_error(
 
 /// True for messages the driver emits itself through debug utils.
 fn is_driver_message(message_id: &str, message: &str) -> bool {
-    message_id.is_empty()
-        || message_id.starts_with("VKDBGUTIL")
-        || message.contains("VKDBGUTIL")
+    message_id.is_empty() || message_id.starts_with("VKDBGUTIL") || message.contains("VKDBGUTIL")
 }
 
 #[cfg(test)]
