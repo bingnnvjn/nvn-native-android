@@ -36,6 +36,7 @@ NVA_SA(offsetof(nva_mem_region, epoch) == 96, "epoch");
 /* ---- nva_fence: 16 B ---- */
 NVA_SA(sizeof(nva_fence) == 16, "nva_fence size");
 NVA_SA(offsetof(nva_fence, domain) == 8, "fence domain");
+NVA_SA(offsetof(nva_fence, gen) == 12, "fence gen");
 
 /* ---- nva_host_services: 48 B，fatal 在偏移 40 ---- */
 NVA_SA(sizeof(nva_host_services) == 48, "nva_host_services size");
