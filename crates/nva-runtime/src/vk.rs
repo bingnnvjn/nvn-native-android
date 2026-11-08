@@ -95,12 +95,13 @@ impl Vk {
         unsafe { Self::new_unsafe() }
     }
 
-    // SAFETY: the caller's obligation is to keep this the only Vulkan instance
-    // the process creates — the instance and device are process-global, and a
-    // second `Vk` would race the validation counter shared with the debug
-    // messenger. Every handle is either stored in the returned `Self` or
-    // abandoned on an early `Err` (a leak, never a use-after-free), so no
-    // partially-owned object escapes to the caller.
+    // SAFETY: the caller's obligation is to keep this the sole constructor of
+    // the process's one `Vk` — the one-object-per-process rule lives in
+    // `nva_gfx_create`, not here — and to accept that an early `Err` abandons
+    // the handles already created (a leak, never a use-after-free: nothing is
+    // stored anywhere but the returned `Self`). The declaration itself comes
+    // from `ash`: every Vulkan entry point it wraps is a raw FFI call the
+    // compiler cannot check, and the bodies above could not be written safely.
     unsafe fn new_unsafe() -> Result<Self, CreateError> {
         let entry = ash::Entry::load()
             .map_err(|e| CreateError::OracleUnavailable(format!("load libvulkan: {e}")))?;

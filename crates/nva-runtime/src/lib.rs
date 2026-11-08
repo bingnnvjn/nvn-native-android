@@ -133,10 +133,11 @@ pub unsafe extern "C" fn nva_gfx_create(
 /// # Safety
 /// `gfx` must be a pointer returned by `nva_gfx_create`, or NULL.
 // SAFETY: `gfx` must be the pointer `nva_gfx_create` wrote and must not have
-// been destroyed. The slot in `CURRENT_GFX` is cleared before `Box::from_raw`,
-// so the object is dropped exactly once and later NVN calls fall through to the
-// stub. NULL is accepted and does nothing. No other thread may be inside an
-// export that uses the same `gfx` — destroy is the caller's last use.
+// been destroyed. When `gfx` is the current object the slot in `CURRENT_GFX` is
+// cleared before `Box::from_raw`, so the object is dropped exactly once and
+// `nvn_queue_submit_commands` afterwards finds an empty slot and returns.
+// NULL is accepted and does nothing. No other thread may be inside an export
+// that uses the same `gfx` — destroy is the caller's last use.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_destroy(gfx: *mut Gfx) {
     if gfx.is_null() {
@@ -407,8 +408,9 @@ unsafe extern "C" fn nvn_device_initialize(device: *mut c_void, builder: *const 
 // signature is `const float[4]` — and the body reads exactly indices 0..3
 // before the borrow ends. `command_buffer` is null-checked and otherwise
 // unused. `PENDING` is process-wide, and taking the lock means the clear state
-// is written under exclusion; a poisoned lock is entered via `into_inner`
-// (known debt #61), which is why the guest must not panic mid-call.
+// is written under exclusion. A poisoned lock is entered via `into_inner`
+// (known debt #61) rather than failing the call; the critical section itself
+// contains no panicking code, so the poison path is unreachable today.
 unsafe extern "C" fn nvn_command_buffer_clear_color(
     command_buffer: *mut c_void,
     _index: i32,
