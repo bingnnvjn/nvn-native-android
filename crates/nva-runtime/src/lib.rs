@@ -331,8 +331,7 @@ fn nvn_entry(name: &str) -> Option<u64> {
     Some(address)
 }
 
-unsafe extern "C" fn nvn_device_builder_set_defaults(builder: *mut c_void) {
-    if builder.is_null() {}
+unsafe extern "C" fn nvn_device_builder_set_defaults(_builder: *mut c_void) {
     // The builder is opaque to the runtime in this ticket; a real default set
     // lands with the NVN object model.
 }
