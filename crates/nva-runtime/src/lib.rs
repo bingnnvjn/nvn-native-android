@@ -78,6 +78,13 @@ impl Gfx {
 /// # Safety
 /// `desc` must point to a readable `nva_gfx_desc` and `out` to a writable
 /// pointer slot.
+// SAFETY: `desc` and `out` are guest-owned and must stay readable/writable for
+// the whole call. Both are null-checked, and `size` / `version` are validated
+// before any other field is read, so a malformed struct fails with
+// `NVA_ERR_INVALID_ARGUMENT` instead of being dereferenced. On success `*out`
+// owns the boxed `Gfx`, and only `nva_gfx_destroy` may free it; the host table
+// behind `desc.host` must outlive that object. The guest calls this from one
+// thread, before any other export has a reason to touch `CURRENT_GFX`.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_create(
     desc: *const nva_gfx_desc,
@@ -125,6 +132,11 @@ pub unsafe extern "C" fn nva_gfx_create(
 
 /// # Safety
 /// `gfx` must be a pointer returned by `nva_gfx_create`, or NULL.
+// SAFETY: `gfx` must be the pointer `nva_gfx_create` wrote and must not have
+// been destroyed. The slot in `CURRENT_GFX` is cleared before `Box::from_raw`,
+// so the object is dropped exactly once and later NVN calls fall through to the
+// stub. NULL is accepted and does nothing. No other thread may be inside an
+// export that uses the same `gfx` — destroy is the caller's last use.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_destroy(gfx: *mut Gfx) {
     if gfx.is_null() {
@@ -141,6 +153,11 @@ pub unsafe extern "C" fn nva_gfx_destroy(gfx: *mut Gfx) {
 
 /// # Safety
 /// `gfx` must be valid and `out` must point to a writable `nva_gfx_caps`.
+// SAFETY: `gfx` must still be alive and `out` must point to a writable
+// `nva_gfx_caps` that the caller keeps exclusively borrowed for the call. The
+// write happens only after `out.size` / `out.version` pass, so a shorter struct
+// is refused with `NVA_ERR_INVALID_ARGUMENT` rather than overrun. Nothing is
+// retained: the caps are copied out and the borrow ends with the call.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_query_caps(
     gfx: *mut Gfx,
@@ -176,6 +193,11 @@ pub unsafe extern "C" fn nva_gfx_query_caps(
 
 /// # Safety
 /// `gfx` must be valid.
+// SAFETY: `gfx` must be a live object and the caller must hold it exclusively
+// for the call — `device_wait_idle` needs external synchronization on the
+// device, which the caller's single-threaded ownership provides. NULL returns
+// `NVA_ERR_INVALID_ARGUMENT`; a failed wait is reported as `NVA_ERR_DEVICE_LOST`
+// and never as success.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_wait_idle(gfx: *mut Gfx) -> nva_abi::nva_status {
     if gfx.is_null() {
@@ -194,6 +216,12 @@ pub unsafe extern "C" fn nva_gfx_wait_idle(gfx: *mut Gfx) -> nva_abi::nva_status
 ///
 /// # Safety
 /// `gfx` must be valid and `fence` must point to a readable `nva_fence`.
+// SAFETY: `gfx` must be live and held exclusively, and `fence` must point to a
+// readable `nva_fence` owned by the guest for the call. The serial is compared
+// before the object state is touched, so a fence from a later frame is an
+// `NVA_ERR_INVALID_ARGUMENT` instead of a state corruption. The `&mut` is what
+// makes the frame bookkeeping single-writer; two concurrent waits would race
+// `pending` as well as the Vulkan fence.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_wait_fence(
     gfx: *mut Gfx,
@@ -227,6 +255,10 @@ pub unsafe extern "C" fn nva_gfx_wait_fence(
 
 /// # Safety
 /// `gfx` must be valid and `out` must point to a writable `nva_stats`.
+// SAFETY: `gfx` must be live and `out` must point to a writable `nva_stats`
+// held exclusively by the caller. `out.size` / `out.version` are checked before
+// the first write, so an older or shorter struct is refused with
+// `NVA_ERR_INVALID_ARGUMENT`. Counters are copied out; nothing is retained.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_get_stats(
     gfx: *mut Gfx,
@@ -257,6 +289,10 @@ pub unsafe extern "C" fn nva_gfx_get_stats(
 ///
 /// # Safety
 /// `gfx` may be NULL.
+// SAFETY: the parameter is never dereferenced — the table is a later ticket's
+// deliverable and the body returns a constant `null` — so no validity
+// requirement rides on `_gfx`: passing NULL is as sound as passing a live
+// object.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_get_nvn_table(_gfx: *mut Gfx) -> *const nva_nvn_table {
     ptr::null()
@@ -267,6 +303,11 @@ pub unsafe extern "C" fn nva_gfx_get_nvn_table(_gfx: *mut Gfx) -> *const nva_nvn
 ///
 /// # Safety
 /// `gfx` must be valid and `out` must point to a writable `nva_verify_state`.
+// SAFETY: `gfx` must be live and `out` must point to a writable
+// `nva_verify_state` held exclusively by the caller. `size` / `version` are
+// checked first; the device name copy is clamped to `device_name.len() - 1` and
+// the terminator written inside the array, so the guest buffer is never
+// overrun. Only `nva-verify` links against this export (#37 D4).
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_verify_probe(
     gfx: *mut Gfx,
@@ -300,6 +341,11 @@ pub unsafe extern "C" fn nva_gfx_verify_probe(
 ///
 /// # Safety
 /// `gfx` may be NULL; `name` must point to a NUL-terminated string.
+// SAFETY: `gfx` may be NULL (checked), and `name` must point to a
+// NUL-terminated string that stays readable for the call — `CStr::from_ptr`
+// walks it to the terminator and keeps no borrow. A name that is not valid
+// UTF-8 resolves to the zero stub rather than panicking, so a bad guest string
+// cannot unwind across the ABI (`LOCAL §2`).
 #[no_mangle]
 pub unsafe extern "C" fn nva_nvn_bootstrap(gfx: *mut Gfx, name: *const c_char) -> u64 {
     if gfx.is_null() || name.is_null() {
@@ -309,6 +355,11 @@ pub unsafe extern "C" fn nva_nvn_bootstrap(gfx: *mut Gfx, name: *const c_char) -
     nvn_entry(name).unwrap_or(nvn_zero_stub as *const () as u64)
 }
 
+// SAFETY: unknown names resolve here. The slot ignores its arguments — the
+// signature has none — and returns 0, the NVN "nothing was recorded" value, so
+// no pointer is dereferenced whatever the guest passes. The marker is on the
+// declaration because its address goes into the table as a callable slot; the
+// body itself relies on nothing from the caller.
 unsafe extern "C" fn nvn_zero_stub() -> u64 {
     0
 }
@@ -331,11 +382,20 @@ fn nvn_entry(name: &str) -> Option<u64> {
     Some(address)
 }
 
+// SAFETY: `_builder` is opaque in this ticket and is never read or written —
+// the slot is a deliberate no-op until the NVN object model lands — so the
+// caller's only obligation is the NVN one: pass the builder it allocated. No
+// pointer is dereferenced, and the slot returns nothing, which is where a
+// failure status would otherwise go (`LOCAL §2`).
 unsafe extern "C" fn nvn_device_builder_set_defaults(_builder: *mut c_void) {
     // The builder is opaque to the runtime in this ticket; a real default set
     // lands with the NVN object model.
 }
 
+// SAFETY: both pointers are null-checked and then never dereferenced; the slot
+// only answers "initialized" once the guest has supplied two live objects. That
+// makes the body sound for any non-NULL pair, and a NULL pair returns 0 rather
+// than reading a device the runtime does not model yet.
 unsafe extern "C" fn nvn_device_initialize(device: *mut c_void, builder: *const c_void) -> u8 {
     if device.is_null() || builder.is_null() {
         return 0;
@@ -343,6 +403,12 @@ unsafe extern "C" fn nvn_device_initialize(device: *mut c_void, builder: *const 
     1
 }
 
+// SAFETY: `color` must point to at least four readable `f32` — the NVN
+// signature is `const float[4]` — and the body reads exactly indices 0..3
+// before the borrow ends. `command_buffer` is null-checked and otherwise
+// unused. `PENDING` is process-wide, and taking the lock means the clear state
+// is written under exclusion; a poisoned lock is entered via `into_inner`
+// (known debt #61), which is why the guest must not panic mid-call.
 unsafe extern "C" fn nvn_command_buffer_clear_color(
     command_buffer: *mut c_void,
     _index: i32,
@@ -358,6 +424,10 @@ unsafe extern "C" fn nvn_command_buffer_clear_color(
     pending.clear_rgba = [*color, *color.add(1), *color.add(2), *color.add(3)];
 }
 
+// SAFETY: `command_buffer` is null-checked and never dereferenced; `count` is
+// clamped at zero before it becomes a `u32` vertex count. The write goes to
+// `PENDING` under the same process-wide lock as the clear slot, so a guest that
+// records clear then draw on one thread sees them in order.
 unsafe extern "C" fn nvn_command_buffer_draw_arrays(
     command_buffer: *mut c_void,
     _primitive: i32,
@@ -373,6 +443,13 @@ unsafe extern "C" fn nvn_command_buffer_draw_arrays(
     pending.draw_vertices = count.max(0) as u32;
 }
 
+// SAFETY: `queue` and `command_buffers` are null-checked and the array is never
+// read — the frame is built from the `PENDING` snapshot, not from the guest's
+// command buffers — so `count >= 1` is the whole array contract this body
+// needs. `CURRENT_GFX` is loaded with Acquire, and the `&mut *gfx` it yields is
+// sound because the NVN entry points run on the guest's single render thread,
+// which does not call `nva_gfx_destroy` or `nva_gfx_wait_fence` at the same
+// time; `last_serial` and `pending` are only written under that assumption.
 unsafe extern "C" fn nvn_queue_submit_commands(
     queue: *mut c_void,
     count: i32,
@@ -406,6 +483,9 @@ unsafe extern "C" fn nvn_queue_submit_commands(
     }
 }
 
+// SAFETY: `_queue` is never dereferenced — the fence wait is the explicit
+// `nva_gfx_wait_fence` call in the smoke path — so the pointer carries no
+// obligation beyond the NVN one of being a queue the guest owns.
 unsafe extern "C" fn nvn_queue_finish(_queue: *mut c_void) {
     // The fence wait is an explicit `nva_gfx_wait_fence` call in the smoke
     // path, so finish does not block here.
@@ -419,6 +499,11 @@ unsafe extern "C" fn nvn_queue_finish(_queue: *mut c_void) {
 
 /// # Safety
 /// `desc` and `out` must be readable/writable as declared.
+// SAFETY: `desc` and `out` are guest-owned and must stay readable/writable for
+// the call; both are null-checked and `size` / `version` are validated before
+// any other field is read. This skeleton always writes NULL to `*out` and
+// returns `NVA_ERR_UNSUPPORTED` (`LOCAL §2`: the failure is the return value,
+// not a panic), so no object is ever handed out to own.
 #[no_mangle]
 pub unsafe extern "C" fn nva_app_create(
     desc: *const nva_app_desc,
@@ -437,11 +522,17 @@ pub unsafe extern "C" fn nva_app_create(
 
 /// # Safety
 /// `app` must be NULL (no app object can be created in this ticket).
+// SAFETY: no app object can be created in this ticket, so the only sound
+// argument is NULL; the body ignores it either way and dereferences nothing.
 #[no_mangle]
 pub unsafe extern "C" fn nva_app_destroy(_app: *mut c_void) {}
 
 /// # Safety
 /// `desc` and `out` must be readable/writable as declared.
+// SAFETY: `desc` and `out` are guest-owned and must stay readable/writable for
+// the call; both are null-checked and `size` / `version` are validated before
+// any other field is read. This skeleton always writes NULL to `*out` and
+// returns `NVA_ERR_UNSUPPORTED`, so no object is ever handed out to own.
 #[no_mangle]
 pub unsafe extern "C" fn nva_host_create(
     desc: *const nva_host_desc,
@@ -462,6 +553,8 @@ pub unsafe extern "C" fn nva_host_create(
 
 /// # Safety
 /// `host` must be NULL (no host object can be created in this ticket).
+// SAFETY: no host object can be created in this ticket, so the only sound
+// argument is NULL; the body ignores it either way and dereferences nothing.
 #[no_mangle]
 pub unsafe extern "C" fn nva_host_destroy(_host: *mut c_void) {}
 
