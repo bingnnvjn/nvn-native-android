@@ -21,6 +21,30 @@ expect_rc() {
   fi
 }
 
+# Same idea, but keeps the output: a gate must name the step that failed, not
+# only exit non-zero. Without this, moving the "which step" line would pass.
+expect_out() {
+  local want=$1
+  shift
+  local out got
+  set +e
+  out=$("$@" 2>&1)
+  got=$?
+  set -e
+  if ((got == 0)); then
+    echo "guard-self-test: expected non-zero rc, got 0: $*" >&2
+    exit 1
+  fi
+  case "$out" in
+    *"$want"*) ;;
+    *)
+      echo "guard-self-test: output lacks '$want': $*" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+      ;;
+  esac
+}
+
 # --- scan_personal.py -------------------------------------------------------
 printf 'clean text\n' >"$TMP/clean.txt"
 expect_rc 0 python3 ci/guard/scan_personal.py "$TMP/clean.txt"
@@ -339,5 +363,39 @@ expect_rc 2 bash ci/guard/check_shell_apk.sh "$TMP/no-such.apk"
 printf 'not an apk\n' >"$TMP/fake.apk"
 expect_rc 2 env ANDROID_HOME=/nonexistent SHELL_NDK_BIN=/nonexistent \
   bash ci/guard/check_shell_apk.sh "$TMP/fake.apk"
+
+# --- check_style.sh (#53) --------------------------------------------------
+# The gate must be able to fail. guard has no Rust toolchain, so a stub cargo
+# stands in through NVA_CARGO -- same injection idea as check_workspace.sh.
+stub_cargo() {
+  local fmt_rc=$1 clippy_rc=$2
+  cat >"$TMP/cargo" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  fmt)    exit $fmt_rc ;;
+  clippy) exit $clippy_rc ;;
+  *)      echo "unexpected cargo args: \$*" >&2; exit 9 ;;
+esac
+EOF
+  chmod +x "$TMP/cargo"
+}
+run_style() { NVA_CARGO="$TMP/cargo" bash ci/guard/check_style.sh "$@"; }
+
+stub_cargo 0 0
+expect_rc 0 run_style
+expect_rc 0 run_style fmt
+expect_rc 0 run_style clippy
+
+stub_cargo 1 0
+expect_rc 1 run_style all
+expect_rc 1 run_style fmt
+expect_out "check_style: fmt FAILED" run_style all
+
+stub_cargo 0 1
+expect_rc 1 run_style all
+expect_rc 1 run_style clippy
+expect_out "check_style: clippy FAILED" run_style all
+
+expect_rc 2 run_style bogus
 
 echo "guard self-tests OK"
