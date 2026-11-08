@@ -21,6 +21,30 @@ expect_rc() {
   fi
 }
 
+# Same idea, but keeps the output: a gate must name the step that failed, not
+# only exit non-zero. Without this, moving the "which step" line would pass.
+expect_out() {
+  local want=$1
+  shift
+  local out got
+  set +e
+  out=$("$@" 2>&1)
+  got=$?
+  set -e
+  if ((got == 0)); then
+    echo "guard-self-test: expected non-zero rc, got 0: $*" >&2
+    exit 1
+  fi
+  case "$out" in
+    *"$want"*) ;;
+    *)
+      echo "guard-self-test: output lacks '$want': $*" >&2
+      printf '%s\n' "$out" >&2
+      exit 1
+      ;;
+  esac
+}
+
 # --- scan_personal.py -------------------------------------------------------
 printf 'clean text\n' >"$TMP/clean.txt"
 expect_rc 0 python3 ci/guard/scan_personal.py "$TMP/clean.txt"
@@ -365,10 +389,12 @@ expect_rc 0 run_style clippy
 stub_cargo 1 0
 expect_rc 1 run_style all
 expect_rc 1 run_style fmt
+expect_out "check_style: fmt FAILED" run_style all
 
 stub_cargo 0 1
 expect_rc 1 run_style all
 expect_rc 1 run_style clippy
+expect_out "check_style: clippy FAILED" run_style all
 
 expect_rc 2 run_style bogus
 

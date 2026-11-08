@@ -193,6 +193,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/scan_tree.sh` | 后缀/路径段黑名单、>4 MiB 未登记二进制、裸 NSO 名、私有密钥、未跟踪文件、全历史；媒体/压缩包/evidence 只查工作树；调用 `scan_personal.py` | 打印命中路径 + 来源（tree/untracked/history） |
 | `ci/guard/check_header_collision.sh` | 产品 `include/` 文件名集合与 spike 树文件名集合求交；只扫 tracked + 未忽略的未跟踪文件；`include/` 为空判错 | 打印碰撞的 spike 路径 |
 | `ci/guard/check_workspace.sh` | 根 workspace 成员恰好 5 个且包名逐一匹配（`cargo metadata --no-deps`）、成员目录无 APK 壳输入、无依赖 Android 的 build script；需 cargo+jq，挂在 `pc-x86_64` | 打印期望 5 个 vs 实际包名或命中文件 |
+| `ci/guard/check_layout_assertions.sh` | C ABI 布局断言的账本（#49）：`include/abi_layout_check.c` 的每条 `NVA_SA` 必须归入某个分组，`ci/guard/layout-assertions.txt` 的 `total` 与 11 个分组逐项比对；孤儿断言判错；不需编译器，挂在 `guard` | 打印 `LAYOUT-INVENTORY: <组> has N, expected M`，末行指出这是账本变更而非编译错误 |
 | `ci/guard/check_doc_refs.py` | 文档交叉引用（`docs/X.md §N`、`ARCH/GATES/PIPELINE/RISKS/PRIVACY §N`）必须指向存在的标题；三级引用（如 `§4.3.4`）跳过；挂在 `guard` | 打印 file:line + 悬空引用 |
 | `ci/guard/scan_magic.py` | 偏移 0 / 0x100 的魔数；`name(key\|kek) = <32 hex>` 行（含 docs）；`--history` 只扫 blob、按 oid 去重并保留 signing/fixtures 豁免；媒体魔数只查工作树 | 打印文件 + 命中类型 |
 | `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
@@ -203,7 +204,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
 | `ci/guard/check_style.sh` | 5 个产品 crate 的格式与 lint：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`；spike 树被 workspace 排除，不在门下 | 打印失败的是 fmt 还是 clippy，并附工具输出 |
-| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact、check_header_collision、check_workspace、check_doc_refs、check_style 做正反例自测 | 打印失败用例 |
+| `ci/guard/test_guards.sh` | 对 §7 的门做正反例自测；当前不覆盖 `scan_apk`、`check_manifest`、`check_derived_ledger`、`check_docs`（正例要真 APK 或真账本）；覆盖面见脚本内 `# --- <name> ---` 分节 | 打印失败用例（期望 rc vs 实际） |
 
 机械门只管形状。规范文本本身在仓库之外，按公开边界 #33 不进 git；仓内留下面这张指针表，
 新会话据此确认项目采用哪份规范，不必靠某台机器的本地文件：
@@ -212,7 +213,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 |---|---|---|---|
 | `RUST-STYLE.google.md` | Google Rust Style Guide 逐字全文 | 第 4 行起 `58500e5e95482cebdcfb79e8c4ac8298758107dc6693f7c65a3a1348f9f0aaec`，60,028 B | 取用 2026-11-08 |
 | `RUST-STYLE.local.md` | 本项目与 Google 的偏差（`LOCAL §1`–`§3`） | 整文件 `eff9d92d310f024231cb3b6c87468d24aecff040d8dd7a60f020176fccef67a6` | 定稿 2026-11-08 |
-| `docs/agents/standards.md` | 判据清单，每条挂 `Google > 章节` 或 `LOCAL §N` | 整文件 `2e30d14777cf1ecbe77b91cce586bf63bd161608e58cd6bb249262f0435d50af` | 定稿 2026-11-08 |
+| `docs/agents/standards.md` | 判据清单，每条挂 `Google > 章节` 或 `LOCAL §N` | 整文件 `cd9f15866769f20a923b714110b36b7a712a34dce0010cedcbcfdc3cc0fcc0eb` | 定稿 2026-11-08 |
 
 哈希是校验手段，不是装饰：拿到同名文件先按标注的口径复算（原文去掉前 3 行元信息，另两份是整文件），
 不一致就说明版本不对，别照着读。表里的路径相对本地工作副本的根——`docs/agents/` 是那里的目录，

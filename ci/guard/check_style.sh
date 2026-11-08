@@ -27,12 +27,18 @@ esac
 
 if [ "$mode" = all ] || [ "$mode" = fmt ]; then
   echo "check_style: cargo fmt --all --check"
-  "$cargo_bin" fmt --all --check
+  "$cargo_bin" fmt --all --check || {
+    echo "check_style: fmt FAILED" >&2
+    exit 1
+  }
 fi
 
 if [ "$mode" = all ] || [ "$mode" = clippy ]; then
   echo "check_style: cargo clippy --workspace --all-targets --locked -- -D warnings"
-  "$cargo_bin" clippy --workspace --all-targets --locked -- -D warnings
+  "$cargo_bin" clippy --workspace --all-targets --locked -- -D warnings || {
+    echo "check_style: clippy FAILED" >&2
+    exit 1
+  }
 fi
 
 echo "check_style: $mode ok"
