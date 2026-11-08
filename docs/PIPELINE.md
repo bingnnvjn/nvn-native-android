@@ -13,7 +13,7 @@
 | APK 怎么签名 | 固定 PKCS12 密钥 `ci/signing/artifact.p12`（公开、非发布信任），`apksigner` 显式 v1+v2+v3，证书 SHA-256 钉在 `ci/signing/fingerprint.txt`，每次断言。 |
 | 发布 | v0 不发。开 Release 的前置与发布物见 §4.3。 |
 | import pack 工具 | **三件，不是一件**：`nva-pack`（L0：extract / pack / verify / install）、`nva-rewrite`（L1）、`shader-build`（L2，.NET）。CI 只跑合成 fixture。 |
-| 红线 | README 中英段 + `docs/DERIVED.md` 账本 + 8 个门禁脚本（含魔数/密钥/个人数据扫描）+ 1 个自测脚本 + release notes 模板固定段。见 §6。 |
+| 红线 | README 中英段 + `docs/DERIVED.md` 账本 + 门禁与自测脚本（含魔数/密钥/个人数据扫描），清单见 §7 + release notes 模板固定段。见 §6。 |
 
 ## 1. 为什么是这个形状
 
@@ -202,7 +202,8 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
-| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact、check_header_collision、check_workspace、check_doc_refs 做正反例自测 | 打印失败用例 |
+| `ci/guard/check_style.sh` | 5 个产品 crate 的格式与 lint：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`；spike 树被 workspace 排除，不在门下 | 打印失败的是 fmt 还是 clippy，并附工具输出 |
+| `ci/guard/test_guards.sh` | 对 scan_magic、scan_personal、check_artifact、check_header_collision、check_workspace、check_doc_refs、check_style 做正反例自测 | 打印失败用例 |
 
 ## 8. 不做什么
 
