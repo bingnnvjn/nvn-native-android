@@ -45,19 +45,6 @@ Read only what the task needs.
 - Phone APK: `spike/abi-slice/android/build_apk.sh`
 - License / notices: `LICENSE`, `NOTICE`
 
-Tool use:
-
-- Read a file with `read` (use `offset`/`limit`).
-- Find paths with `glob`.
-- Search contents with the `grep` tool.
-- Use `bash` for build, run, and network tools.
-- If a bash search is unavoidable, use `rg` only:
-  `rg pattern`, `rg --files -g '*.rs'`. Do not use `cat`, `find`, `grep`,
-  `sed`, `head`, or `tail` for inspection.
-
-Long sessions can be audited with
-`spike/abi-slice/scripts/audit_tool_use.py <session.v4.jsonl.zstd>`.
-
 ## ABI change
 
 Five files must stay in sync. If they drift, `check_table.py`,
