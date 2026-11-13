@@ -58,15 +58,18 @@ static PENDING: Mutex<PendingFrame> = Mutex::new(PendingFrame {
 /// 1. `PendingFrame` is plain data: a `[f32; 4]` and a `u32`, with no invariant
 ///    tying one field to the other. No panic can leave it in a state a later
 ///    reader would mistake for a valid frame.
-/// 2. The critical sections only assign a single field. They allocate nothing,
-///    index nothing, and call nothing that can panic, so a panic inside one of
-///    them cannot come from this crate's own work and cannot interrupt a write
-///    halfway.
+/// 2. The engine's three critical sections only read or write the frame's
+///    fields. They allocate nothing, index nothing, and call nothing that can
+///    panic, so a panic inside one of them cannot come from this crate's own
+///    work and cannot interrupt a write halfway. The only panic raised while
+///    the guard is held is in `pending_recovers_a_poisoned_lock` below, which
+///    takes the lock on purpose to create the poison and writes nothing while
+///    it holds it.
 /// 3. Release builds set `panic = "abort"` in the workspace `Cargo.toml`
 ///    (`[profile.release]`), so a poisoned `PENDING` cannot exist there at all:
 ///    it is reachable only under the unwind semantics of the `test` profile,
-///    where the panic that poisoned it has already failed the test that caused
-///    it. Failing the lock here would instead turn that one failure into a
+///    where an unintended panic has already failed the test that caused it.
+///    Failing the lock here would instead turn that one failure into a
 ///    cascade across every later submission in the same test binary.
 fn pending() -> MutexGuard<'static, PendingFrame> {
     PENDING
