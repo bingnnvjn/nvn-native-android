@@ -48,6 +48,30 @@ static PENDING: std::sync::Mutex<PendingFrame> = std::sync::Mutex::new(PendingFr
     draw_vertices: 0,
 });
 
+/// Locks `PENDING`, taking the guard back out of a poisoned mutex rather than
+/// failing.
+///
+/// Recovering is safe here for three reasons:
+///
+/// 1. `PendingFrame` is plain data: a `[f32; 4]` and a `u32`, with no invariant
+///    tying one field to the other. No panic can leave it in a state a later
+///    reader would mistake for a valid frame.
+/// 2. The critical sections only assign a single field. They allocate nothing,
+///    index nothing, and call nothing that can panic, so a panic inside one of
+///    them cannot come from this crate's own work and cannot interrupt a write
+///    halfway.
+/// 3. Release builds set `panic = "abort"` in the workspace `Cargo.toml`
+///    (`[profile.release]`), so a poisoned `PENDING` cannot exist there at all:
+///    it is reachable only under the unwind semantics of the `test` profile,
+///    where the panic that poisoned it has already failed the test that caused
+///    it. Failing the lock here would instead turn that one failure into a
+///    cascade across every later submission in the same test binary.
+fn pending() -> std::sync::MutexGuard<'static, PendingFrame> {
+    PENDING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// The engine object behind the opaque `nva_gfx *`.
 pub struct Gfx {
     vk: Vk,
@@ -408,9 +432,9 @@ unsafe extern "C" fn nvn_device_initialize(device: *mut c_void, builder: *const 
 // signature is `const float[4]` — and the body reads exactly indices 0..3
 // before the borrow ends. `command_buffer` is null-checked and otherwise
 // unused. `PENDING` is process-wide, and taking the lock means the clear state
-// is written under exclusion. A poisoned lock is entered via `into_inner`
-// (known debt #61) rather than failing the call; the critical section itself
-// contains no panicking code, so the poison path is unreachable today.
+// is written under exclusion. `pending()` recovers a poisoned lock instead of
+// failing the call; its own comment gives the reasons, and the critical section
+// here contains no panicking code.
 unsafe extern "C" fn nvn_command_buffer_clear_color(
     command_buffer: *mut c_void,
     _index: i32,
@@ -420,10 +444,8 @@ unsafe extern "C" fn nvn_command_buffer_clear_color(
     if command_buffer.is_null() || color.is_null() {
         return;
     }
-    let mut pending = PENDING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    pending.clear_rgba = [*color, *color.add(1), *color.add(2), *color.add(3)];
+    let mut frame = pending();
+    frame.clear_rgba = [*color, *color.add(1), *color.add(2), *color.add(3)];
 }
 
 // SAFETY: `command_buffer` is null-checked and never dereferenced; `count` is
@@ -439,10 +461,8 @@ unsafe extern "C" fn nvn_command_buffer_draw_arrays(
     if command_buffer.is_null() {
         return;
     }
-    let mut pending = PENDING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    pending.draw_vertices = count.max(0) as u32;
+    let mut frame = pending();
+    frame.draw_vertices = count.max(0) as u32;
 }
 
 // SAFETY: `queue` and `command_buffers` are null-checked and the array is never
@@ -465,10 +485,8 @@ unsafe extern "C" fn nvn_queue_submit_commands(
         return;
     }
     let (clear_rgba, draw_vertices) = {
-        let pending = PENDING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        (pending.clear_rgba, pending.draw_vertices)
+        let frame = pending();
+        (frame.clear_rgba, frame.draw_vertices)
     };
     let gfx = &mut *gfx;
     match gfx.vk.submit_frame(clear_rgba, draw_vertices) {
@@ -565,5 +583,38 @@ fn max_sample_count(bits: u32) -> u32 {
         1
     } else {
         1 << (31 - bits.leading_zeros())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pending, PENDING};
+
+    /// A panic while the guard is held poisons `PENDING`, and the poison
+    /// outlives the test that caused it. A helper thread produces the panic
+    /// without `catch_unwind`: `join` hands it back as an `Err` instead of
+    /// letting it escape into this test.
+    #[test]
+    fn pending_recovers_a_poisoned_lock() {
+        let poisoned = std::thread::spawn(|| {
+            let _guard = PENDING.lock().expect("PENDING starts unpoisoned");
+            panic!("poison PENDING on purpose");
+        })
+        .join();
+        assert!(poisoned.is_err(), "the helper thread must have panicked");
+        assert!(
+            PENDING.is_poisoned(),
+            "the panic must leave PENDING poisoned"
+        );
+
+        let mut frame = pending();
+        frame.draw_vertices = 7;
+        assert_eq!(
+            frame.draw_vertices, 7,
+            "the recovered guard must be writable"
+        );
+        // Restore the initial value rather than leave the poisoned static
+        // describing this test.
+        frame.draw_vertices = 0;
     }
 }
