@@ -14,6 +14,8 @@ use core::ffi::{c_char, c_void, CStr};
 use core::mem::size_of;
 use core::ptr;
 
+use std::sync::{Mutex, MutexGuard};
+
 use nva_abi::{
     nva_app_desc, nva_gfx_caps, nva_gfx_desc, nva_host_desc, nva_nvn_table, nva_stats,
     NVA_APP_DESC_VERSION, NVA_ERR_DEVICE_LOST, NVA_ERR_INVALID_ARGUMENT, NVA_ERR_TIMEOUT,
@@ -43,7 +45,7 @@ struct PendingFrame {
     draw_vertices: u32,
 }
 
-static PENDING: std::sync::Mutex<PendingFrame> = std::sync::Mutex::new(PendingFrame {
+static PENDING: Mutex<PendingFrame> = Mutex::new(PendingFrame {
     clear_rgba: [0.0; 4],
     draw_vertices: 0,
 });
@@ -66,7 +68,7 @@ static PENDING: std::sync::Mutex<PendingFrame> = std::sync::Mutex::new(PendingFr
 ///    where the panic that poisoned it has already failed the test that caused
 ///    it. Failing the lock here would instead turn that one failure into a
 ///    cascade across every later submission in the same test binary.
-fn pending() -> std::sync::MutexGuard<'static, PendingFrame> {
+fn pending() -> MutexGuard<'static, PendingFrame> {
     PENDING
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -597,6 +599,8 @@ mod tests {
     #[test]
     fn pending_recovers_a_poisoned_lock() {
         let poisoned = std::thread::spawn(|| {
+            // TEST-ONLY: lock `PENDING` directly to create the poison. The
+            // engine's own code reaches it only through `pending()`.
             let _guard = PENDING.lock().expect("PENDING starts unpoisoned");
             panic!("poison PENDING on purpose");
         })
