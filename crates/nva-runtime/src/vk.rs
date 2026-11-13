@@ -86,9 +86,22 @@ pub struct Vk {
 
 impl Vk {
     pub fn new() -> Result<Self, CreateError> {
+        // SAFETY: every input the body consumes is owned by it — the layer and
+        // extension names are `&'static CStr` literals, the pointer vectors live
+        // until `create_instance` returns — and no caller pointer crosses the
+        // boundary. Each handle it creates is stored in the `Self` it returns
+        // and destroyed by the `Drop` impl below, so the block cannot outlive
+        // the objects it makes.
         unsafe { Self::new_unsafe() }
     }
 
+    // SAFETY: the caller's obligation is to keep this the sole constructor of
+    // the process's one `Vk` — the one-object-per-process rule lives in
+    // `nva_gfx_create`, not here — and to accept that an early `Err` abandons
+    // the handles already created (a leak, never a use-after-free: nothing is
+    // stored anywhere but the returned `Self`). The declaration itself comes
+    // from `ash`: every Vulkan entry point it wraps is a raw FFI call the
+    // compiler cannot check, and the bodies above could not be written safely.
     unsafe fn new_unsafe() -> Result<Self, CreateError> {
         let entry = ash::Entry::load()
             .map_err(|e| CreateError::OracleUnavailable(format!("load libvulkan: {e}")))?;
@@ -489,6 +502,12 @@ impl Vk {
     }
 
     pub fn wait_idle(&mut self) -> Result<(), String> {
+        // SAFETY: `self.device` came from `new_unsafe` and is destroyed only in
+        // `Drop`; `&mut self` means no other thread holds a handle to this `Vk`,
+        // which is the external synchronization `vkDeviceWaitIdle` requires. No
+        // command buffer is in the recording state here — submit and wait
+        // alternate, and `submit_frame` refuses a second frame while one is in
+        // flight.
         unsafe {
             self.device
                 .device_wait_idle()
@@ -502,6 +521,15 @@ impl Vk {
         if self.submitted {
             return Err("previous frame was submitted but not waited".into());
         }
+        // SAFETY: the one-frame-in-flight rule above is what makes this sound.
+        // `vkResetFences` needs an unsignaled-and-idle fence — `submitted` is
+        // false only after `wait_frame` consumed the previous submission.
+        // `vkResetCommandBuffer` is legal because the pool was created with
+        // `RESET_COMMAND_BUFFER`, and the buffer is not pending. The copy reads
+        // the image in `TRANSFER_SRC_OPTIMAL`, the layout the render pass's
+        // `final_layout` leaves behind. Queue, fence and command buffer are
+        // reached through `&mut self`, so the guest's render thread is the only
+        // submitter and `vkQueueSubmit`'s external synchronization holds.
         unsafe {
             self.device
                 .reset_fences(std::slice::from_ref(&self.fence))
@@ -592,6 +620,14 @@ impl Vk {
         if !self.submitted {
             return Err(WaitError::Failed("no frame was submitted".into()));
         }
+        // SAFETY: the fence was submitted by `submit_frame` on this device, and
+        // `submitted` is still true, so it is pending. `Ok` from
+        // `vkWaitForFences` is the point after which the readback buffer holds
+        // the copy: the mapping covers exactly `readback_size` from offset 0,
+        // inside an allocation created `HOST_VISIBLE | HOST_COHERENT`, so the
+        // host read needs no invalidate and cannot see a partial write. The
+        // slice never outlives the mapping — `unmap_memory` runs before the
+        // block ends — and the four bytes read are inside the buffer's extent.
         unsafe {
             match self
                 .device
@@ -624,6 +660,12 @@ impl Vk {
 
 impl Drop for Vk {
     fn drop(&mut self) {
+        // SAFETY: every handle below came from the matching create in
+        // `new_unsafe`, and each is destroyed exactly once here, before the
+        // object that owns it. `device_wait_idle` proves no submission is still
+        // executing, so nothing is destroyed under the GPU. Children go before
+        // the device and the device before the instance; `_entry` (declared
+        // first) drops last, so the loader is loaded for every call.
         unsafe {
             let _ = self.device.device_wait_idle();
             self.device.destroy_buffer(self.readback_buffer, None);
@@ -658,6 +700,10 @@ fn read_spirv(bytes: &[u8]) -> Result<Vec<u32>, CreateError> {
 }
 
 fn device_name_string(name: &[c_char]) -> String {
+    // SAFETY: `name` is `props.device_name`, a `[c_char; 256]` the Vulkan spec
+    // requires be a NUL-terminated UTF-8 string; the borrow outlives the call
+    // and `to_string_lossy` copies before it ends, so the returned `String`
+    // never points into the caller's array.
     unsafe { CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned() }
 }
 
@@ -674,6 +720,11 @@ fn find_memory_type(
     })
 }
 
+// SAFETY: `entry` must be a live loader handle — `Vk` owns the `ash::Entry` that
+// loaded it — and `name` must be a `&CStr` that outlives the call. The loader
+// returns `VkLayerProperties` whose `layer_name` is a NUL-terminated
+// `[c_char; 256]`; the vector lives until the closure returns, and every
+// `CStr::from_ptr` borrow ends inside it.
 unsafe fn has_layer(entry: &ash::Entry, name: &CStr) -> bool {
     entry
         .enumerate_instance_layer_properties()
@@ -685,6 +736,11 @@ unsafe fn has_layer(entry: &ash::Entry, name: &CStr) -> bool {
         .unwrap_or(false)
 }
 
+// SAFETY: as `has_layer`: `entry` must still be a live loader handle and `name`
+// must outlive the call. The `None` argument means "no layer filter", so the
+// loader enumerates instance extensions and returns entries whose
+// `extension_name` is a NUL-terminated `[c_char; 256]` owned by the vector the
+// closure iterates.
 unsafe fn has_instance_extension(entry: &ash::Entry, name: &CStr) -> bool {
     entry
         .enumerate_instance_extension_properties(None)
@@ -696,6 +752,14 @@ unsafe fn has_instance_extension(entry: &ash::Entry, name: &CStr) -> bool {
         .unwrap_or(false)
 }
 
+// SAFETY: the loader calls this on the validation layer's thread while the
+// messenger is alive, and every pointer it passes — `callback_data`,
+// `p_message_id_name`, `p_message` — is valid only for the duration of the
+// callback; they are read and copied or printed here, never stored. `user_data`
+// is the `Arc<AtomicU32>` handed to `pfn_user_callback`, kept alive by the `Vk`
+// that owns the messenger, so the counter reference cannot dangle. The body must
+// not unwind: it has no panicking path (`unwrap_or` covers non-UTF-8) because
+// `LOCAL §2` forbids an unwind across the C ABI, where it would end the process.
 unsafe extern "system" fn debug_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     types: vk::DebugUtilsMessageTypeFlagsEXT,
