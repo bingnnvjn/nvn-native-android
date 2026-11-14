@@ -228,6 +228,31 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/check_style.sh` | 5 个产品 crate 的格式与 lint：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`；spike 树被 workspace 排除，不在门下 | 打印失败的是 fmt 还是 clippy，并附工具输出 |
 | `ci/guard/test_guards.sh` | 对 §7 的门做正反例自测；当前不覆盖 `scan_apk`、`check_manifest`、`check_derived_ledger`、`check_docs`（正例要真 APK 或真账本）；覆盖面见脚本内 `# --- <name> ---` 分节 | 打印失败用例（期望 rc vs 实际） |
 
+### 7.1 按名字钉测试：两份内联，暂不抽（2026-11-14）
+
+`pc-x86_64` 里有两段同形的「按名字钉测试」循环，各自内联在 step 中：`nva-runtime unit tests
+(#61, #66)` 与 `nva-verify exit-code matrix (#43)`。
+
+两份的循环骨架 6 行同形：`for name in \`、`grep -q "test ${name} \.\.\. ok" <日志> || {`、
+`echo "::error::<前缀> …"`、`exit 1`、`}`、`done`。其中 4 行逐字相同，另 2 行只有日志名与
+`::error::` 前缀不同；理由注释的首行也逐字相同，第二行起分叉。逐字重复合计 5 行。
+
+**决定：暂不抽 `ci/guard/pin_tests.sh`。** 抽取能换来两样：`shellcheck` 覆盖，和只有一份实现。
+后者的价钱是本节的脚本表加一行、`test_guards.sh` 加自测（`guard` 没有 cargo，脚本必须是纯 shell，
+并按 `check_workspace.sh` 的做法开 test seam）、以及 YAML 与脚本之间多一层间接。名单、日志、
+前缀三项参数各自独立取值，抽成脚本也消不掉差异——5 行逐字重复换不动上面那堆。
+
+**什么时候改这个决定**（任一条发生就抽）：
+
+- 出现**第三处**这种 step。计法：某个 step 用 `grep` 逐名断言一份测试日志里出现
+  `test <name> ... ok`，就计一处；范围是 `ci.yml` 全文件，不限 job。今天 `for name in`
+  恰好两处；`Product ABI layout test` 只查 `1 passed` 这个计数，不计。
+- 这两段之一的骨架需要变复杂（例如要认 `ignored`、要固定测试线程顺序、要按 `--test-threads`
+  分组）。
+
+内联 shell 没有静态检查：`ci.yml` 的 `shellcheck -S warning ci/guard/*.sh shell/android/*.sh`
+覆盖不到 YAML 的 `run:` 块，全仓也没有 actionlint / yamllint。这是抽取不花成本的那半好处。
+
 机械门只管形状。规范文本本身在仓库之外，按公开边界 #33 不进 git；仓内留下面这张指针表，
 新会话据此确认项目采用哪份规范，不必靠某台机器的本地文件：
 
@@ -246,10 +271,10 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 `pc-x86_64` 里有两段同形的「按名字钉测试」循环，各自内联在 step 中：`nva-runtime unit tests
 (#61, #66)` 与 `nva-verify exit-code matrix (#43)`。骨架 6 行逐字相同（`for name in \` 到
 `done`；`set -euo pipefail` 每个 step 都有，不计入），参数只有三项——测试名名单、日志文件、
-`::error::` 前缀；另有两行理由注释逐字相同，合计 8 行重复。
+`::error::` 前缀；理由注释的首行也逐字相同，第二行起分叉。逐字重复合计 7 行。
 
 **决定：暂不抽 `ci/guard/pin_tests.sh`。** 两份参数不同且各自稳定，抽取要连带改本节的门禁脚本表、
-给 `test_guards.sh` 加自测、并在 YAML 与脚本之间加一层间接。8 行重复换不来这些成本。
+给 `test_guards.sh` 加自测、并在 YAML 与脚本之间加一层间接。7 行重复换不来这些成本。
 
 **什么时候改这个决定**（任一条发生就抽）：
 

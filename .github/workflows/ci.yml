@@ -243,6 +243,7 @@ jobs:
           # `0 failed` alone is not an assertion: libtest prints it for an
           # empty target too, so a deleted test file would stay green. Pin one
           # test per documented exit code (0/2/3/4) by name instead.
+          # Same recorded decision as the runtime step above: docs/PIPELINE.md §7.1.
           for name in \
             synthetic_pack_exits_0 \
             tampered_load_plan_exits_2 \
