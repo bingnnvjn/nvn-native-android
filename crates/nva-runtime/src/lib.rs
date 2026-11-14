@@ -599,16 +599,27 @@ mod tests {
     /// outlives the test that caused it. A helper thread produces the panic
     /// without `catch_unwind`: `join` hands it back as an `Err` instead of
     /// letting it escape into this test.
+    ///
+    /// The poison is permanent, so this test is meaningful once per process:
+    /// if another test poisons `PENDING` before this one runs, the assertion
+    /// below fails.
     #[test]
     fn pending_recovers_a_poisoned_lock() {
-        let poisoned = std::thread::spawn(|| {
+        // Asserted, not assumed: without this line an already-poisoned
+        // `PENDING` would let the test pass while proving nothing — the
+        // helper's `expect` fails on the poisoned lock, `join` hands back an
+        // `Err`, and `is_poisoned()` is already true. With it, that case is a
+        // failure instead. #66 runs the crate's whole test binary, so another
+        // test could get there first.
+        assert!(!PENDING.is_poisoned(), "PENDING must start unpoisoned");
+        let join_result = std::thread::spawn(|| {
             // TEST-ONLY: lock `PENDING` directly to create the poison. The
             // engine's own code reaches it only through `pending()`.
             let _guard = PENDING.lock().expect("PENDING starts unpoisoned");
             panic!("poison PENDING on purpose");
         })
         .join();
-        assert!(poisoned.is_err(), "the helper thread must have panicked");
+        assert!(join_result.is_err(), "the helper thread must have panicked");
         assert!(
             PENDING.is_poisoned(),
             "the panic must leave PENDING poisoned"
