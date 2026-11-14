@@ -244,11 +244,12 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 ### 7.1 按名字钉测试：两份内联，暂不抽（2026-11-14）
 
 `pc-x86_64` 里有两段同形的「按名字钉测试」循环，各自内联在 step 中：`nva-runtime unit tests
-(#61, #66)` 与 `nva-verify exit-code matrix (#43)`。骨架 7 行逐字相同，参数只有三项——测试名名单、
-日志文件、`::error::` 前缀；另有两行理由注释逐字相同。
+(#61, #66)` 与 `nva-verify exit-code matrix (#43)`。骨架 6 行逐字相同（`for name in \` 到
+`done`；`set -euo pipefail` 每个 step 都有，不计入），参数只有三项——测试名名单、日志文件、
+`::error::` 前缀；另有两行理由注释逐字相同，合计 8 行重复。
 
 **决定：暂不抽 `ci/guard/pin_tests.sh`。** 两份参数不同且各自稳定，抽取要连带改本节的门禁脚本表、
-给 `test_guards.sh` 加自测、并在 YAML 与脚本之间加一层间接。约 9 行重复换不来这些成本。
+给 `test_guards.sh` 加自测、并在 YAML 与脚本之间加一层间接。8 行重复换不来这些成本。
 
 **什么时候改这个决定**（任一条发生就抽）：
 
