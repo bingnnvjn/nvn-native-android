@@ -43,6 +43,28 @@
 
 **分支保护（人工设置，仓库脚本无法自检）**：GitHub 上 main 的 required check 必须设为 `gate`，并勾选禁止 force-push。改完在仓库设置页核对一次；这条不写进 CI。
 
+### 2.1 job × 工具可用性
+
+给 `ci.yml` 加 step 前先查这张表：step 能不能跑，取决于**那个 job 装没装工具**，不是
+本地有什么。写错 job 的改动要到 CI 才红（2026-11-13 实录：曾把 `cargo test` 方案写进
+`guard`，靠评审纠回 `pc-x86_64`——`guard` 没有 cargo）。
+
+| job | cargo 1.97.1 | cc / c++ | NDK r27d | glslang | python3 |
+|---|---|---|---|---|---|
+| `guard` | — | — | — | — | ✅ |
+| `pc-x86_64` | ✅ | ✅（build-essential） | — | ✅ | ✅（镜像自带） |
+| `arm64-linux` | ✅（原生 AArch64） | ✅（原生 AArch64） | — | ✅ | ✅（镜像自带） |
+| `android-aarch64` | ✅（+`aarch64-linux-android` target） | ✅（NDK clang） | ✅ | ✅ | ✅（镜像自带） |
+| `shell-apk` | — | （NDK clang 已配置，无编译 step） | ✅ | — | ✅（镜像自带） |
+| `tools`（预留） | ✅ | — | — | — | ✅（镜像自带） |
+
+依据是 `ci.yml` 各 job 的 install step（`guard` 的「不编任何东西」见 §2 表与
+`pc-x86_64` 内 #39 注释）；改了 install step 就同步改这张表。
+
+口径脚注：`✅/—` 按「该 job 有没有使用它的 step」计；`python3` 是例外——各 job 的
+runner 镜像都自带，`guard` 直接调用（无 install step），故按可用性全标 ✅。`cc/c++`
+同为镜像自带，但表中按 install step 口径（`build-essential` / NDK clang）标。
+
 ## 3. Artifact 契约
 
 | 名字 | 内容 | 保留 | 谁能拿 |
