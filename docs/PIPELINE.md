@@ -241,6 +241,33 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 不一致就说明版本不对，别照着读。表里的路径相对本地工作副本的根——`docs/agents/` 是那里的目录，
 不是本仓 `docs/` 的子目录，clone 出来后找不到它属正常。
 
+### 7.1 按名字钉测试：两份内联，暂不抽（2026-11-14）
+
+`pc-x86_64` 里有两段同形的「按名字钉测试」循环，各自内联在 step 中：`nva-runtime unit tests
+(#61, #66)` 与 `nva-verify exit-code matrix (#43)`。
+
+两份的循环骨架 6 行同形：`for name in \`、`grep -q "test ${name} \.\.\. ok" <日志> || {`、
+`echo "::error::<前缀> …"`、`exit 1`、`}`、`done`（名单连同末行的 `; do` 算参数，故按 6 行计）。
+其中 4 行逐字相同，另 2 行只有日志名与 `::error::` 前缀不同；理由注释的首行也逐字相同，第二行起
+分叉。逐字重复合计 5 行。
+
+**决定：暂不抽 `ci/guard/pin_tests.sh`。** 抽取能换来两样：`shellcheck` 覆盖，和只有一份实现。
+后者的价钱是 §7 的脚本表加一行、`test_guards.sh` 加自测（`guard` 没有 cargo，脚本必须是纯 shell、
+按 `check_workspace.sh` 的做法开 test seam）、以及 YAML 与脚本之间多一层间接。名单、日志、
+前缀三项参数各自独立取值，抽成脚本也消不掉差异——5 行逐字重复换不动上面那堆。
+
+**什么时候改这个决定**（任一条发生就抽）：
+
+- 出现**第三处**这种 step。计法：某个 step 用 `grep` 逐名断言一份测试日志里出现
+  `test <name> ... ok`，就计一处；范围是 `ci.yml` 全文件，不限 job。今天 `for name in`
+  恰好两处；`Product ABI layout test` 只查 `1 passed` 这个计数，不计。
+- 这两段之一的骨架需要变复杂（例如要认 `ignored`、要固定测试线程顺序、要按 `--test-threads`
+  分组）。
+
+内联 shell 没有静态检查：`ci.yml` 的 `shellcheck -S warning ci/guard/*.sh shell/android/*.sh`
+覆盖不到 YAML 的 `run:` 块，全仓也没有 actionlint / yamllint。抽取的两样好处里，这一样是内联
+永远拿不到的。
+
 ## 8. 不做什么
 
 - 不在 CI 里跑真游戏数据（没有任何 job 接受 XCI/keys）。
