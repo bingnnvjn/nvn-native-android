@@ -601,17 +601,16 @@ mod tests {
     /// letting it escape into this test.
     ///
     /// The poison is permanent, so this test is meaningful once per process:
-    /// no other test may panic while holding `PENDING`'s guard, or the
-    /// assertion below fires.
+    /// if another test poisons `PENDING` before this one runs, the assertion
+    /// below fails.
     #[test]
     fn pending_recovers_a_poisoned_lock() {
-        // The precondition is asserted, not assumed: since #66 runs this
-        // crate's whole test binary, another test could poison `PENDING`
-        // first. That case would still pass — the helper's `expect` fails on
-        // the already-poisoned lock, `join` hands back an `Err`, and the
-        // assertions below still hold — but the poison `pending()` recovers
-        // from would not be this test's, so it would prove nothing about its
-        // own panic.
+        // Asserted, not assumed: without this line an already-poisoned
+        // `PENDING` would let the test pass while proving nothing — the
+        // helper's `expect` fails on the poisoned lock, `join` hands back an
+        // `Err`, and `is_poisoned()` is already true. With it, that case is a
+        // failure instead. #66 runs the crate's whole test binary, so another
+        // test could get there first.
         assert!(!PENDING.is_poisoned(), "PENDING must start unpoisoned");
         let join_result = std::thread::spawn(|| {
             // TEST-ONLY: lock `PENDING` directly to create the poison. The

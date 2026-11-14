@@ -198,8 +198,8 @@ jobs:
       # #61: nothing else in this workflow runs nva-runtime's unit tests, so
       # the poison test would stay green after deletion — the trap the
       # nva-verify step below names. #66 widened this step from `--exact` on
-      # that one test to the whole crate: the five debug_filter tests had never
-      # run in CI either. One step, not two — a second step would run the
+      # that one test to the whole lib target: the five debug_filter tests had
+      # never run in CI either. One step, not two — a second step would run the
       # poison test twice and leave two places to keep in sync.
       - name: "nva-runtime unit tests (#61, #66)"
         run: |
@@ -208,7 +208,9 @@ jobs:
           # `0 failed` alone is not an assertion: libtest prints it for an
           # empty target too, so a deleted test file would stay green. Pin
           # every test by name instead — the #61 step pinned only the poison
-          # test, and #66 asks for the whole crate.
+          # test, and #66 asks for the whole lib target. The list is written by
+          # hand: a test added later runs here but is not pinned until someone
+          # adds its name, so the closing line claims only the listed ones.
           for name in \
             debug_filter::tests::empty_message_id_driver_message_does_not_count \
             debug_filter::tests::vkdbgutil_id_does_not_count \
@@ -221,7 +223,7 @@ jobs:
               exit 1
             }
           done
-          echo "nva-runtime: every test pinned by name"
+          echo "nva-runtime: every pinned test passed"
 
       - name: Product loadplan on the synthetic fixture (#42)
         run: |
