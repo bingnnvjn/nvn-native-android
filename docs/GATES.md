@@ -95,6 +95,7 @@ done
 - 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。产品壳这两条在 `shell-apk` job 的 `ci/guard/check_shell_apk.sh`（#46）；spike 侧今天只有 `scan_apk.sh` 与 `check_manifest.sh`（artifact 模式，允许 debuggable），没有这两条断言。
 - spike 树不含与产品 `include/` 同名的文件（见 §2.2）；该断言在 `guard` job。
 - 布局断言四条全部进 CI：宿主 C11 / C++17 在 `pc-x86_64`，NDK C11 / C++17 在 `android-aarch64`；其余命令并入 `pc-x86_64`（#45 接线）；壳/APK 断言已就位（`shell-apk` 于 #46 启用并入 `gate.needs`）。任一条失败必须让 `gate` 红。
+- `pc-x86_64` 另外承载 L0/L1 的合成 fixture 回归（`nva-pack verify`、`nva-verify rewrite`，接线见 #74）：**不属 M0a 判据**，红了同 job 红，按 step 名区分。M0a 的判据仍是上面那张命令块。
 - **变异测试**：删一条 `_Static_assert`、删一个 workspace 成员，各跑一次，CI 必须红；两次的 run id 记进台账。断言清单由 `guard` job 的 `check_layout_assertions.sh` 钉住（#49）：总数与每组条数逐项相等，期望值在 `ci/guard/layout-assertions.txt`，少一条即红。
 
 ## 4. M0b — 真机首帧门
