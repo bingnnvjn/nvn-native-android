@@ -299,7 +299,7 @@ pub unsafe extern "C" fn nva_gfx_wait_fence(
 // held exclusively by the caller. `out.size` / `out.version` are read before
 // the first write, so the caller has to initialise those two fields; an older
 // or shorter struct is then refused with `NVA_ERR_INVALID_ARGUMENT`. Every
-// counter field is written; `size` and `version` stay the caller's.
+// field except `size` and `version` is written; those two stay the caller's.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_get_stats(
     gfx: *mut Gfx,

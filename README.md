@@ -47,10 +47,10 @@ Read only what the task needs.
 
 ## ABI change
 
-Two shapes, two sync sets. Drift fails a guard job: `check_layout_assertions.sh`
-(assertion counts) or `check_header_collision.sh` (header names) in `guard`,
-`check_workspace.sh` (membership) in `pc-x86_64`. The spike's slot table has its
-own checker, `spike/abi-slice/scripts/check.sh`.
+Two shapes, two sync sets. ABI drift fails CI in three places:
+`check_layout_assertions.sh` (assertion inventory) and `check_header_collision.sh`
+(header names) in `guard`, `check_workspace.sh` (membership) in `pc-x86_64`. The
+spike's slot table has its own checker, `spike/abi-slice/scripts/check.sh`.
 
 **Struct append** (add fields at the tail, bump that struct's `version`):
 
@@ -58,9 +58,10 @@ own checker, `spike/abi-slice/scripts/check.sh`.
 - `include/abi_layout_check.c` — `sizeof`, one `offsetof` per new field, version macro
 - `crates/nva-abi/src/lib.rs` — `#[repr(C)]` mirror, same field order, `nva_sa!` asserts
 - `ci/guard/layout-assertions.txt` — total and the touched group's count, same commit
-- `ci/guard/check_layout_assertions.sh` — the header comment that explains how the inventory is counted
-- `crates/nva-runtime/src/lib.rs` — the exporting function; write every counter field (0 while
-  unproduced), leave `size` / `version` to the caller
+- `ci/guard/check_layout_assertions.sh` — nothing to update here (it holds no counts on
+  purpose); read its header when the grouping changes
+- `crates/nva-runtime/src/lib.rs` — the exporting function; write every field except
+  `size` / `version` (0 while unproduced)
 - `crates/nva-verify/src/smoke.rs` — struct literals name every field, so a new one fails the build
 - `docs/GATES.md`, `docs/ARCHITECTURE.md` §7.4 — the contract text
 

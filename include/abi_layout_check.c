@@ -6,8 +6,8 @@
  *   $NDK/toolchains/llvm/prebuilt/<host>/bin/aarch64-linux-android26-clang \
  *      -std=c11 -Wall -Wextra -c include/abi_layout_check.c -o /tmp/abi-arm64.o
  *
- * 任一 _Static_assert 失败即 ABI 漂移。同步集合按形状分开查：结构体追加的八项清单
- * 在 README.md「ABI change」，槽位变更的七项清单在 CODING_STANDARDS.md「ABI slot change」。
+ * 任一 _Static_assert 失败即 ABI 漂移。同步集合按形状分开查：结构体追加的清单在
+ * README.md「ABI change」，槽位变更的清单在 CODING_STANDARDS.md「ABI slot change」。
  */
 #include "nva_abi.h"
 

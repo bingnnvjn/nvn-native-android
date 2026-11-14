@@ -207,7 +207,7 @@ pub struct nva_stats {
     pub submits: u64,
     /// Frames presented. Differs from `frames` when a frame is skipped.
     pub presents: u32,
-    /// attach/detach generation.
+    /// Attach/detach generation counter.
     pub surface_generation: u32,
     /// Shader variants the cache did not hold.
     pub missing_variants: u32,
