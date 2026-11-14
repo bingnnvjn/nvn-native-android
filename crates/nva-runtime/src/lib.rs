@@ -608,10 +608,10 @@ mod tests {
         // The precondition is asserted, not assumed: since #66 runs this
         // crate's whole test binary, another test could poison `PENDING`
         // first. That case would still pass — the helper's `expect` fails on
-        // the already-poisoned lock, `join` hands back an `Err`, and both
-        // assertions below hold — but the poison `pending()` recovers from
-        // would not be this test's, so it would prove nothing about its own
-        // panic.
+        // the already-poisoned lock, `join` hands back an `Err`, and the
+        // assertions below still hold — but the poison `pending()` recovers
+        // from would not be this test's, so it would prove nothing about its
+        // own panic.
         assert!(!PENDING.is_poisoned(), "PENDING must start unpoisoned");
         let join_result = std::thread::spawn(|| {
             // TEST-ONLY: lock `PENDING` directly to create the poison. The
