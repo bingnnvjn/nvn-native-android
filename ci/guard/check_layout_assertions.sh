@@ -7,8 +7,10 @@
 #
 # This guard pins the total and the per-group split. The expected numbers live
 # in layout-assertions.txt next to this script: an ABI append then changes data
-# rather than shell code, and the diff reads "76 -> 77, nva_stats 2 -> 11"
-# (README.md, "ABI change").
+# rather than shell code, and the diff reads "total 76 -> 86, nva_stats 2 -> 11,
+# SVC 10 -> 11" (#90: nine offset assertions plus one version assertion).
+# The total must equal the sum of the groups; change one without the others and
+# this guard goes red.
 #
 # Usage: check_layout_assertions.sh [REPO_ROOT] [EXPECT_FILE]
 # Exit codes: 0 clean, 1 inventory drift, 2 bad input (root/file/expect).

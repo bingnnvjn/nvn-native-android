@@ -47,12 +47,20 @@ Read only what the task needs.
 
 ## ABI change
 
-Five files must stay in sync. If they drift, `check_table.py`,
-`check_header_collision.sh` or `check_layout_assertions.sh` fails the `guard`
-job:
+Two shapes, two sync sets. Drift fails the `guard` job (`check_table.py`,
+`check_header_collision.sh`, `check_layout_assertions.sh`).
 
-- `include/nva_abi.h`
-- `spike/abi-slice/include/nva_abi_spike.h`
-- `spike/abi-slice/src/lib.rs` (slot names)
-- `spike/abi-slice/nvn-table.json`
-- `ci/guard/layout-assertions.txt` (assertion count and per-group split; #49)
+**Struct append** (add fields at the tail, bump that struct's `version`):
+
+- `include/nva_abi.h` — struct, field order, `NVA_<X>_VERSION`
+- `include/abi_layout_check.c` — `sizeof`, one `offsetof` per new field, version macro
+- `crates/nva-abi/src/lib.rs` — `#[repr(C)]` mirror, same field order, `nva_sa!` asserts
+- `ci/guard/layout-assertions.txt` — total and the touched group's count, same commit
+- `crates/nva-runtime/src/lib.rs` — the exporting function; write every field (0 while unproduced)
+- `crates/nva-verify/src/smoke.rs` — struct literals name every field, so a new one fails the build
+- `docs/GATES.md`, `docs/ARCHITECTURE.md` §7.4 — the contract text
+
+**Slot change** (add or change an NVN function): the seven-item list in
+`CODING_STANDARDS.md` → `## ABI slot change`.
+
+Field names and meanings come from `docs/GATES.md` §2.4.

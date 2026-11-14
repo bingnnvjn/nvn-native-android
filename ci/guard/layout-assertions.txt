@@ -4,15 +4,15 @@
 # Group names are single tokens (no spaces), and the count is per line.
 # If the ABI grows on purpose: bump the numbers here in the same commit
 # (README.md, "ABI change").
-total 76
+total 86
 nva_mem_region 12
 nva_fence 3
 nva_host_services 6
 nva_shader_cache 3
 nva_gfx_desc 3
 nva_gfx_caps 3
-nva_stats 2
+nva_stats 11
 NVN 17
 host 6
 平台壳 11
-SVC 10
+SVC 11

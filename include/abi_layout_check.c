@@ -61,9 +61,18 @@ NVA_SA(sizeof(nva_gfx_caps) == 56, "nva_gfx_caps size");
 NVA_SA(offsetof(nva_gfx_caps, max_memory_allocation_size) == 32, "caps alloc size");
 NVA_SA(offsetof(nva_gfx_caps, min_imported_host_pointer_alignment) == 48, "caps min align");
 
-/* ---- nva_stats: 56 B ---- */
-NVA_SA(sizeof(nva_stats) == 56, "nva_stats size");
+/* ---- nva_stats: 96 B ---- */
+NVA_SA(sizeof(nva_stats) == 96, "nva_stats size");
 NVA_SA(offsetof(nva_stats, frames) == 32, "stats frames");
+NVA_SA(offsetof(nva_stats, presents) == 56, "stats presents");
+NVA_SA(offsetof(nva_stats, surface_generation) == 60, "stats surface_generation");
+NVA_SA(offsetof(nva_stats, missing_variants) == 64, "stats missing_variants");
+NVA_SA(offsetof(nva_stats, draw_skipped) == 68, "stats draw_skipped");
+NVA_SA(offsetof(nva_stats, xruns) == 72, "stats xruns");
+NVA_SA(offsetof(nva_stats, input_events) == 76, "stats input_events");
+NVA_SA(offsetof(nva_stats, input_consumed) == 80, "stats input_consumed");
+NVA_SA(offsetof(nva_stats, guest_svc_count) == 84, "stats guest_svc_count");
+NVA_SA(offsetof(nva_stats, draw_caller_in_guest) == 88, "stats draw_caller_in_guest");
 
 /* ---- NVN ---- */
 NVA_SA(sizeof(nva_nvn_slot) == 16, "nvn slot size");
@@ -123,6 +132,7 @@ NVA_SA(offsetof(nva_svc_frame, flags) == 92, "svc flags");
 NVA_SA(NVA_ABI_VERSION == 1u, "abi version");
 NVA_SA(NVA_HOST_SERVICES_VERSION == 2u, "services version");
 NVA_SA(NVA_GFX_DESC_VERSION == 2u, "gfx desc version");
+NVA_SA(NVA_STATS_VERSION == 2u, "stats version");
 NVA_SA(NVA_NVN_TABLE_VERSION == 2u, "nvn table version");
 NVA_SA(NVA_ERR_TIMEOUT == 8, "timeout code");
 
