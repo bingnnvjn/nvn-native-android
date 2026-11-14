@@ -211,6 +211,8 @@ jobs:
           # test, and #66 asks for the whole lib target. The list is written by
           # hand: a test added later runs here but is not pinned until someone
           # adds its name, so the closing line claims only the listed ones.
+          # Pinning the names inline is a recorded decision, not an oversight:
+          # read docs/PIPELINE.md §7.1 before extracting a helper.
           for name in \
             debug_filter::tests::empty_message_id_driver_message_does_not_count \
             debug_filter::tests::vkdbgutil_id_does_not_count \
