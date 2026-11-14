@@ -197,16 +197,31 @@ jobs:
 
       # #61: nothing else in this workflow runs nva-runtime's unit tests, so
       # the poison test would stay green after deletion — the trap the
-      # nva-verify step below names. Scoped to this one test on purpose: the
-      # five debug_filter tests have never run in CI, and widening the gate to
-      # the whole crate is #66.
-      - name: PENDING poison recovery (#61)
+      # nva-verify step below names. #66 widened this step from `--exact` on
+      # that one test to the whole crate: the five debug_filter tests had never
+      # run in CI either. One step, not two — a second step would run the
+      # poison test twice and leave two places to keep in sync.
+      - name: "nva-runtime unit tests (#61, #66)"
         run: |
           set -euo pipefail
-          cargo test -p nva-runtime --lib -- --exact tests::pending_recovers_a_poisoned_lock \
-            | tee nva-runtime-tests.log
-          grep -q 'test tests::pending_recovers_a_poisoned_lock \.\.\. ok' nva-runtime-tests.log
-          echo "pending_recovers_a_poisoned_lock: ok"
+          cargo test -p nva-runtime --lib | tee nva-runtime-tests.log
+          # `0 failed` alone is not an assertion: libtest prints it for an
+          # empty target too, so a deleted test file would stay green. Pin
+          # every test by name instead — the #61 step pinned only the poison
+          # test, and #66 asks for the whole crate.
+          for name in \
+            debug_filter::tests::empty_message_id_driver_message_does_not_count \
+            debug_filter::tests::vkdbgutil_id_does_not_count \
+            debug_filter::tests::vkdbgutil_in_text_does_not_count \
+            debug_filter::tests::layer_vuid_counts \
+            debug_filter::tests::warnings_and_non_validation_types_do_not_count \
+            tests::pending_recovers_a_poisoned_lock; do
+            grep -q "test ${name} \.\.\. ok" nva-runtime-tests.log || {
+              echo "::error::nva-runtime test ${name} did not run and pass"
+              exit 1
+            }
+          done
+          echo "nva-runtime: every test pinned by name"
 
       - name: Product loadplan on the synthetic fixture (#42)
         run: |

@@ -601,14 +601,20 @@ mod tests {
     /// letting it escape into this test.
     #[test]
     fn pending_recovers_a_poisoned_lock() {
-        let poisoned = std::thread::spawn(|| {
+        // The precondition is asserted, not assumed: since #66 runs this
+        // crate's whole test binary, another test could poison `PENDING`
+        // first. That case would still pass — the helper's `expect` fails on
+        // the already-poisoned lock, `join` hands back an `Err`, and both
+        // assertions below hold — while recovering nothing at all.
+        assert!(!PENDING.is_poisoned(), "PENDING must start unpoisoned");
+        let join_result = std::thread::spawn(|| {
             // TEST-ONLY: lock `PENDING` directly to create the poison. The
             // engine's own code reaches it only through `pending()`.
             let _guard = PENDING.lock().expect("PENDING starts unpoisoned");
             panic!("poison PENDING on purpose");
         })
         .join();
-        assert!(poisoned.is_err(), "the helper thread must have panicked");
+        assert!(join_result.is_err(), "the helper thread must have panicked");
         assert!(
             PENDING.is_poisoned(),
             "the panic must leave PENDING poisoned"
