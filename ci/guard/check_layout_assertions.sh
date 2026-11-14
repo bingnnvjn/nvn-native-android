@@ -7,8 +7,10 @@
 #
 # This guard pins the total and the per-group split. The expected numbers live
 # in layout-assertions.txt next to this script: an ABI append then changes data
-# rather than shell code, and the diff reads "76 -> 77, nva_stats 2 -> 11"
-# (README.md, "ABI change").
+# rather than shell code, and the diff reads "total 76 -> 86, nva_stats 2 -> 11,
+# SVC 10 -> 11" (#90: nine offset assertions plus one version assertion).
+# The total must equal the sum of the groups; change one without the others and
+# this guard goes red.
 #
 # Usage: check_layout_assertions.sh [REPO_ROOT] [EXPECT_FILE]
 # Exit codes: 0 clean, 1 inventory drift, 2 bad input (root/file/expect).
@@ -53,10 +55,10 @@ fi
 # this guard would say so instead of passing.
 #
 # Group labels come from the `/* ---- <label> ---- */` headers. A label may
-# carry a trailing note after ':' ("nva_fence: 16 B"), cut off below. The five
-# version-macro assertions at the end of the file have no header of their own
-# and therefore count under the last one (SVC, 10 rather than 5). That is the
-# file as it stands; this ticket adds no assertion and reorders none.
+# carry a trailing note after ':' ("nva_fence: 16 B"), cut off below. The
+# version-macro assertions at the end of the file have no header of their own and
+# therefore count under the last one (SVC). Counts are not repeated here on
+# purpose: the numbers live in layout-assertions.txt and nowhere else.
 actual=$(awk '
   /^\/\* ---- / {
     label = $0

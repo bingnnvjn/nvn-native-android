@@ -283,12 +283,23 @@ pub unsafe extern "C" fn nva_gfx_wait_fence(
     }
 }
 
+/// Fills `out` from the engine's counters.
+///
+/// Version discipline: the layout is append-only (v2 appends nine `u32`
+/// counters after the frozen 56 B prefix), but this entry point serves only the
+/// current `NVA_STATS_VERSION`. A v1 caller is refused with
+/// `NVA_ERR_INVALID_ARGUMENT`. That is deliberate (spec #37, GATES §2.4,
+/// docs/ARCHITECTURE.md §7.4): one build has one stats layout, and answering
+/// an older version would mean inventing the counters it never had.
+///
 /// # Safety
-/// `gfx` must be valid and `out` must point to a writable `nva_stats`.
+/// `gfx` must be valid, and `out` must point to a writable `nva_stats` whose
+/// `size` and `version` fields are already initialised by the caller.
 // SAFETY: `gfx` must be live and `out` must point to a writable `nva_stats`
-// held exclusively by the caller. `out.size` / `out.version` are checked before
-// the first write, so an older or shorter struct is refused with
-// `NVA_ERR_INVALID_ARGUMENT`. Counters are copied out; nothing is retained.
+// held exclusively by the caller. `out.size` / `out.version` are read before
+// the first write, so the caller has to initialise those two fields; an older
+// or shorter struct is then refused with `NVA_ERR_INVALID_ARGUMENT`. Every
+// field except `size` and `version` is written; those two stay the caller's.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_get_stats(
     gfx: *mut Gfx,
@@ -311,6 +322,17 @@ pub unsafe extern "C" fn nva_gfx_get_stats(
     out.frames = gfx.frames;
     out.draw_calls = gfx.draw_calls;
     out.submits = gfx.submits;
+    // v2 counters: #93/#96 produce them. Zero here so a caller that did not
+    // initialise its struct never reads uninitialised memory back.
+    out.presents = 0;
+    out.surface_generation = 0;
+    out.missing_variants = 0;
+    out.draw_skipped = 0;
+    out.xruns = 0;
+    out.input_events = 0;
+    out.input_consumed = 0;
+    out.guest_svc_count = 0;
+    out.draw_caller_in_guest = 0;
     NVA_OK
 }
 

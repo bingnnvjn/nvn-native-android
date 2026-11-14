@@ -1,7 +1,7 @@
 # 里程碑门（M0–M3）
 
 > 来源：#22（评论为指针，本文件为权威正文）。证据全私有，见 #33。
-> 版本：v9（2026-11-07）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动；v7 只改 §3 变异测试的措辞并在 §9 记一条缺口，判据值不动；v8 只把 §3/§8 的旧字段名换成实际输出名 `validation_errors`（#48），判据值不动；v9 补布局断言清单守卫（#49），§3 变异测试回到「删一条 `_Static_assert`」，§9 把那条缺口换成更窄的一条（守条数，不守断言内容），判据值不动。
+> 版本：v10（2026-11-15）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动；v7 只改 §3 变异测试的措辞并在 §9 记一条缺口，判据值不动；v8 只把 §3/§8 的旧字段名换成实际输出名 `validation_errors`（#48），判据值不动；v9 补布局断言清单守卫（#49），§3 变异测试回到「删一条 `_Static_assert`」，§9 把那条缺口换成更窄的一条（守条数，不守断言内容），判据值不动；v10 落地 §2.4 的九字段追加（#90），`nva_stats` 96 B / `NVA_STATS_VERSION = 2`，判据值不动。
 > 依据：#20（L0–L6 + C ABI v1）、#21（流水线）、#30（真机竖切）、#31（validation）、#33（公开边界）。
 
 ## 0. 效度边界
@@ -50,9 +50,13 @@
 
 `nva-verify device` 的 scenario：`m0b`、`m1`、`m2-0`、`m2a`、`m2b`、`m3a`、`m3b-{plateau,village,camp,shrine,water}`。
 
-### 2.4 计数字段追加（ABI 追加票的输入）
+### 2.4 计数字段追加（已落地：#90）
 
-现有 `nva_stats`（`nva_abi.h:135`）只有 `unsupported_calls`、`unknown_resolves`、`stub_aborts`、`sticky_error`、`last_serial`、`flags`、`frames`、`draw_calls`、`submits`。设备门还需要下列字段，全部 `uint32_t`，**尾部追加、`NVA_STATS_VERSION` 升 2**，由实现票执行（本票不改 ABI）：
+`nva_stats` 在 #90 从 56 B / v1 升到 **96 B / v2**（`nva_abi.h:137`）：v1 的 56 B 前缀一个字节不动，下列九个 `uint32_t` 按本表顺序尾部追加，`NVA_STATS_VERSION = 2`。布局由 `abi_layout_check.c` 的 11 条断言钉住（sizeof 96 + 10 条 offset），Rust 镜像同数，账本 `total 86 / nva_stats 11 / SVC 11`。
+
+版本口径：**布局层兼容**（旧二进制读前 56 B、按 `version` 分支仍成立），**运行时只认当前版本**——`nva_gfx_get_stats` 对 `version != 2` 返回 `NVA_ERR_INVALID_ARGUMENT`，v1 调用方被硬拒。这不是缺陷，是 #37 的裁定（docs/ARCHITECTURE.md §7.4）。
+
+九个字段的生产值由 #93（首帧上屏）与 #96 填；在那之前运行时把它们写 0，调用方不会读回未初始化内存。
 
 | 字段 | 用途 | 门 |
 |---|---|---|
@@ -203,7 +207,7 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 
 - 输入三段：确认键（`M2-0`）→ overlay 摇杆/ABXY（`M2b`）→ 手柄（M3 之后）。
 - pack 上机：M1–M3 用 `nva-pack install`（adb，dev-only）；SAF 在 `M3b`。
-- `nva_stats` 追加：§2.4，由实现票做；落地后回填本文件与 `abi_layout_check.c`。
+- `nva_stats` 追加：§2.4 已在 #90 落地（96 B / `NVA_STATS_VERSION = 2`，账本 86/11/11）；九个计数目前恒 0，由 #93/#96 填写。
 - **#31**：不前置任何门；每门记 `validation_available` 与 `validation_errors`；到 M2 末未关则按 #31 路径 3 收口，附失败命令、loader 版本、logcat 哈希。
 - 证据：`PIPELINE.md:49` 的公开 evidence artifact 对产品门退役，只在 spike 保留；#33 定私有根路径。
 
@@ -228,3 +232,4 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - v7：§3 变异测试的第 1 项改成「改一条 `_Static_assert` 使其失败」——按原措辞删一条断言不会红（#47 实测）；§9 记「无断言清单守卫」缺口。判据值不变。
 - v8：§3/§8 的旧字段名改成实际输出名 `validation_errors`（#48，D9）。判据值不变。
 - v9：布局断言清单守卫落地（#49）——`guard` job 新增 `check_layout_assertions.sh`，钉住 76 条与 11 个分组的逐项条数；§3 变异测试回到「删一条 `_Static_assert`」；§9 把「无断言清单守卫」换成更窄的一条（守条数，不守断言内容）；`README.md` 的 ABI 清单加 `ci/guard/layout-assertions.txt`。判据值不变。
+- v10：#90 落地 §2.4 的九字段追加——`nva_stats` 96 B / `NVA_STATS_VERSION = 2`，C/Rust 各 9 条 offset 断言 + 1 条版本断言，账本 86/11/11；docs/ARCHITECTURE.md §7.4 的断言清单按实际 19 个结构体重列；`nva_gfx_get_stats` 只认当前版本的口径写进 §2.4 与 docs/ARCHITECTURE.md §7.4。判据值不变。

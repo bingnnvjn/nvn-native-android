@@ -11,7 +11,9 @@
  *
  * 规则：
  *   - 全 extern "C"，固定宽度；结构体首两字段 size/version。
- *   - 只尾部追加新字段并升该结构 version；消费方按 version 分支。
+ *   - 只尾部追加新字段并升该结构 version；布局层消费方按 version 分支，
+ *     运行时接口只认当前版本（`nva_gfx_get_stats` 对非当前 stats 版本返回
+ *     NVA_ERR_INVALID_ARGUMENT）。
  *   - Rust 侧 panic=abort；不允许 unwind 穿过 FFI。
  *   - host 编译 +reserve-x18；thunk/gate/impl 不读写 x18；NVNboolean 是 8-bit。
  *
@@ -132,13 +134,23 @@ typedef struct nva_gfx_caps {            /* 56 B */
 #define NVA_GFX_CAP_VULKAN_11        0x1u
 #define NVA_GFX_CAP_CONDITIONAL_QUERY 0x2u
 
-typedef struct nva_stats {               /* 56 B */
+typedef struct nva_stats {               /* 96 B；v2 尾部追加 36 B，补 4 B 对齐 */
     uint32_t size, version;
     uint32_t unsupported_calls, unknown_resolves, stub_aborts, sticky_error;
     uint32_t last_serial, flags;
     uint64_t frames, draw_calls, submits;
+    /* v2 设备门计数（GATES §2.4）。尚未产生计数的实现填 0。 */
+    uint32_t presents;                   /* 上屏次数；跳帧时与 frames 不等 */
+    uint32_t surface_generation;         /* attach/detach 代数 */
+    uint32_t missing_variants;           /* shader cache 未命中的变体数 */
+    uint32_t draw_skipped;               /* 因缺变体被跳过的 draw */
+    uint32_t xruns;                      /* 音频欠载次数 */
+    uint32_t input_events;               /* 送出的输入事件数 */
+    uint32_t input_consumed;             /* guest 消费的输入事件数 */
+    uint32_t guest_svc_count;            /* guest 陷入 host 的次数 */
+    uint32_t draw_caller_in_guest;       /* 调用点落在 guest X 段的 draw 数 */
 } nva_stats;
-#define NVA_STATS_VERSION 1u
+#define NVA_STATS_VERSION 2u
 
 nva_status nva_gfx_create(const nva_gfx_desc *desc, nva_gfx **out);
 void       nva_gfx_destroy(nva_gfx *gfx);

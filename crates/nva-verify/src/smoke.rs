@@ -215,6 +215,15 @@ pub fn run(options: &Options) -> Outcome {
                 frames: 0,
                 draw_calls: 0,
                 submits: 0,
+                presents: 0,
+                surface_generation: 0,
+                missing_variants: 0,
+                draw_skipped: 0,
+                xruns: 0,
+                input_events: 0,
+                input_consumed: 0,
+                guest_svc_count: 0,
+                draw_caller_in_guest: 0,
             };
             let status = nva_gfx_get_stats(gfx, &mut stats);
             if status != NVA_OK {
