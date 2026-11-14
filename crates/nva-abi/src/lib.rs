@@ -189,7 +189,7 @@ pub const NVA_GFX_CAP_VULKAN_11: u32 = 0x1;
 pub const NVA_GFX_CAP_CONDITIONAL_QUERY: u32 = 0x2;
 
 /// 96 B. The v1 prefix is the frozen 56 B layout; v2 appends the nine `u32`
-/// device counters from `docs/GATES.md` §2.4 and pads to 96 B to keep the
+/// device counters from docs/GATES.md §2.4 and pads to 96 B to keep the
 /// `u64` fields 8-byte aligned. The nine read as zero until #93/#96 produce
 /// them.
 #[repr(C)]

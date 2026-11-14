@@ -289,7 +289,7 @@ pub unsafe extern "C" fn nva_gfx_wait_fence(
 /// counters after the frozen 56 B prefix), but this entry point serves only the
 /// current `NVA_STATS_VERSION`. A v1 caller is refused with
 /// `NVA_ERR_INVALID_ARGUMENT`. That is deliberate (spec #37, GATES §2.4,
-/// `docs/ARCHITECTURE.md` §7.4): one build has one stats layout, and answering
+/// docs/ARCHITECTURE.md §7.4): one build has one stats layout, and answering
 /// an older version would mean inventing the counters it never had.
 ///
 /// # Safety
