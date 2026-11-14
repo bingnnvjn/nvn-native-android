@@ -2,17 +2,18 @@
 
 > 输入：#15（Actions 构建链事实）、#16（公开边界）、#20（L0–L6 与 C ABI v1）、#7（APK + 本地导入包）、
 > `docs/ARCHITECTURE.md`（产品架构，§3.1–3.3 与 §4 是 import pack 的权威定义）。
-> 状态：v0，覆盖 ABI spike 与产品壳 job（`shell-apk` 于 #46 启用）；`tools` 仍预留。决定日期 2026-10-31，产品壳更新 2026-11-01。
+> 状态：v0，覆盖 ABI spike 与产品壳 job（`shell-apk` 于 #46 启用）。决定日期 2026-10-31，产品壳更新 2026-11-01，
+> `tools` 占位 job 于 #73 删除（L0/L1 的断言改归 `pc-x86_64`，见 #74）。
 
 ## 0. 一页结论
 
 | 问题 | 决定 |
 |---|---|
-| CI 编什么 | `guard`（红线）、`pc-x86_64`（lavapipe 回归）、`arm64-linux`（AArch64 契约）、`android-aarch64`（交叉 + APK）、`shell-apk`（产品壳，无 Gradle：`aapt2`/`d8`/`apksigner`）。工具 `tools` 仍以骨架预留、默认不启用。 |
+| CI 编什么 | `guard`（红线）、`pc-x86_64`（lavapipe 回归）、`arm64-linux`（AArch64 契约）、`android-aarch64`（交叉 + APK）、`shell-apk`（产品壳，无 Gradle：`aapt2`/`d8`/`apksigner`）。 |
 | 出什么 artifact | `abi-slice-apk`、`abi-slice-pc`、`abi-slice-arm64`、`abi-slice-evidence`、`shell-apk`（产品壳，`nva-shell.apk` + 证据，#46）。**不建 GitHub Release**（v0）。 |
 | APK 怎么签名 | 固定 PKCS12 密钥 `ci/signing/artifact.p12`（公开、非发布信任），`apksigner` 显式 v1+v2+v3，证书 SHA-256 钉在 `ci/signing/fingerprint.txt`，每次断言。 |
 | 发布 | v0 不发。开 Release 的前置与发布物见 §4.3。 |
-| import pack 工具 | **三件，不是一件**：`nva-pack`（L0：extract / pack / verify / install）、`nva-rewrite`（L1）、`shader-build`（L2，.NET）。CI 只跑合成 fixture。 |
+| import pack 工具 | **三件，不是一件**：`nva-pack`（L0：extract / pack / verify / install）、`nva-rewrite`（L1）、`shader-build`（L2，.NET）。CI 只用合成 fixture，接线见 §5.3。 |
 | 红线 | README 中英段 + `docs/DERIVED.md` 账本 + 门禁与自测脚本（含魔数/密钥/个人数据扫描），清单见 §7 + release notes 模板固定段。见 §6。 |
 
 ## 1. 为什么是这个形状
@@ -33,9 +34,8 @@
 | `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单；C ABI 布局断言 NDK C11 / C++17（#40） | `abi-slice-apk`、`abi-slice-evidence` |
 | `gate` | ubuntu-24.04 | 不编 | 汇总：任一必需 job 非 success 即红 | 无 |
 | `shell-apk` | ubuntu-24.04 | 产品壳 `shell/android/`，无 Gradle（`aapt2`/`d8`/`apksigner`，#46） | APK 内容扫描（`scan_apk.sh`）、`check_shell_apk.sh`（xmltree 断包名/`minSdk 26`/无 `debuggable` + `llvm-nm -D` 断 `JNI_OnLoad`）、`check_manifest.sh` 的 `product` 模式（证书/ABI/权限/v2+v3） | `shell-apk` |
-| `tools`（预留 `if: false`） | ubuntu-24.04 | `nva-pack` / `nva-rewrite` | 合成 fixture：`nva-verify rewrite/loadplan` | `tools` |
 
-**为什么 `gate` 单独存在**：分支保护只认一个必需检查时，多 job 的组合态不好表达；`gate` 折成一个状态位。**启用 `shell-apk` 或 `tools` 时，必须把它们加进 `gate.needs`**，否则启用后仍然绿——这条写在这里，因为它是开关，不是摆设。`shell-apk` 已于 #46 加入 `gate.needs`；`tools` 尚未启用。
+**为什么 `gate` 单独存在**：分支保护只认一个必需检查时，多 job 的组合态不好表达；`gate` 折成一个状态位。**新增 job 时必须把它的 id 加进 `gate.needs`**，否则启用后仍然是绿的——这条写在这里，因为它是开关，不是摆设。`shell-apk` 已于 #46 加入 `gate.needs`。
 
 **为什么 `guard` 不依赖任何构建**：红线检查必须最快、最便宜，且 PR 上先红。它 `fetch-depth: 0` 扫**全历史**——#16 的教训是「删掉了但历史里还在」同样致命。
 
@@ -56,7 +56,6 @@
 | `arm64-linux` | ✅（原生 AArch64） | ✅（原生 AArch64） | — | ✅ | ✅（镜像自带） |
 | `android-aarch64` | ✅（+`aarch64-linux-android` target） | ✅（NDK clang） | ✅ | ✅ | ✅（镜像自带） |
 | `shell-apk` | — | （NDK clang 已配置，无编译 step） | ✅ | — | ✅（镜像自带） |
-| `tools`（预留） | ✅ | — | — | — | ✅（镜像自带） |
 
 依据是 `ci.yml` 各 job 的 install step（`guard` 的「不编任何东西」见 §2 表与
 `pc-x86_64` 内 #39 注释）；改了 install step 就同步改这张表。
@@ -185,7 +184,8 @@ pack/
 
 ### 5.3 CI 的交界
 
-CI 只跑三件事，全部无游戏数据：
+L0/L1 的 CI 交界是下面三件事，全部无游戏数据。**它们今天还没接进 CI**：#73 删掉了从未启用的 `tools`
+占位 job，接线随 L0/L1 的实现归到 #74。这段契约先留在这里，删 job 不等于删契约。
 
 1. `cargo test -p nva-pack -p nva-rewrite`（合成 NSO / fixture）。
 2. `nva-verify rewrite --fixture` 与 `nva-verify loadplan --fixture`，断言退出码 0/2/3/4 的语义。

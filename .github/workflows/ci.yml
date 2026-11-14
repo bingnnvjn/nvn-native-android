@@ -719,42 +719,8 @@ jobs:
           retention-days: 30
 
   # ------------------------------------------------------------------------
-  # 工具占位：nva-pack / nva-rewrite 的合成 fixture 测试。产品树未入库前不启用。
-  # ------------------------------------------------------------------------
-  tools:
-    name: tools (reserved)
-    if: false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-
-      - name: Install Rust stable
-        run: |
-          set -euo pipefail
-          if ! command -v rustup >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal
-            . "$HOME/.cargo/env"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
-          rustup toolchain install 1.97.1
-          rustup default 1.97.1
-
-      - name: Synthetic fixtures only — no --xci, no --keys
-        run: |
-          set -euo pipefail
-          cargo test -p nva-pack -p nva-rewrite
-          nva-verify rewrite --fixture ci/fixtures/rewrite-min
-          nva-verify loadplan --fixture ci/fixtures/pack-min
-          nva-pack verify ci/fixtures/pack-min
-
-  # ------------------------------------------------------------------------
   # 汇总门：分支保护只需要这一个必需检查。
-  # 启用 shell-apk / tools 时，必须把它们的 job id 加进 needs，否则启用后仍绿。
+  # 新增 job 时必须把它的 id 加进 needs，否则启用后仍然绿——这条是开关，不是摆设。
   # ------------------------------------------------------------------------
   gate:
     name: gate
