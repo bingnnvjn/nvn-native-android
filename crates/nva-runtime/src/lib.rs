@@ -289,16 +289,17 @@ pub unsafe extern "C" fn nva_gfx_wait_fence(
 /// counters after the frozen 56 B prefix), but this entry point serves only the
 /// current `NVA_STATS_VERSION`. A v1 caller is refused with
 /// `NVA_ERR_INVALID_ARGUMENT`. That is deliberate (spec #37, GATES §2.4,
-/// ARCHITECTURE §7.4): one build has one stats layout, and answering an older
-/// version would mean inventing the counters it never had.
+/// `docs/ARCHITECTURE.md` §7.4): one build has one stats layout, and answering
+/// an older version would mean inventing the counters it never had.
 ///
 /// # Safety
-/// `gfx` must be valid and `out` must point to a writable `nva_stats`.
+/// `gfx` must be valid, and `out` must point to a writable `nva_stats` whose
+/// `size` and `version` fields are already initialised by the caller.
 // SAFETY: `gfx` must be live and `out` must point to a writable `nva_stats`
-// held exclusively by the caller. `out.size` / `out.version` are checked before
-// the first write, so an older or shorter struct is refused with
-// `NVA_ERR_INVALID_ARGUMENT`. Every field of the struct is written; nothing is
-// retained.
+// held exclusively by the caller. `out.size` / `out.version` are read before
+// the first write, so the caller has to initialise those two fields; an older
+// or shorter struct is then refused with `NVA_ERR_INVALID_ARGUMENT`. Every
+// counter field is written; `size` and `version` stay the caller's.
 #[no_mangle]
 pub unsafe extern "C" fn nva_gfx_get_stats(
     gfx: *mut Gfx,

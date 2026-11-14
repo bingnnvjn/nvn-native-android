@@ -234,7 +234,7 @@ v1 只有**一个**公开头 `include/nva_abi.h`：按 `/* ---- 段 ---- */` 分
 ### 7.4 版本与不变量
 
 - `NVA_ABI_VERSION = 1`；结构体版本独立：`mem_region 1`、`fence 1`、`host_services 2`、`shader_cache 1`、`gfx_desc 2`、`gfx_caps 1`、`stats 2`、`nvn_table 2`、`thread_desc 1`、`host_desc 1`、`audio_config 1`、`platform 1`、`input_event 1`、`app_callbacks 1`、`app_desc 1`、`svc_frame 1`。
-- 只尾部追加 + 升该结构 `version`；`size` 只做边界检查，禁止用 size 猜版本。**布局层**消费方按 `version` 分支；**运行时接口只认当前版本**——`nva_gfx_get_stats` 对 `version != NVA_STATS_VERSION` 返回 `NVA_ERR_INVALID_ARGUMENT`，v1 调用方被硬拒（#37 裁定，`GATES.md` §2.4）。一个构建里只有一种 stats 布局；假装服务旧版本只能靠编造计数。
+- 只尾部追加 + 升该结构 `version`；`size` 只做边界检查，禁止用 size 猜版本。**布局层**消费方按 `version` 分支；**运行时接口只认当前版本**——`nva_gfx_get_stats` 对 `version != NVA_STATS_VERSION` 返回 `NVA_ERR_INVALID_ARGUMENT`，v1 调用方被硬拒（#37 裁定，`docs/GATES.md` §2.4）。一个构建里只有一种 stats 布局；假装服务旧版本只能靠编造计数。
 - `_Static_assert` 全量（`include/abi_layout_check.c`，19 个结构体的 sizeof；账本 86 条）：`mem_region` 104、`fence` 16、`host_services` 48、`shader_cache` 32、`gfx_desc` 32、`gfx_caps` 56、`stats` 96、`nvn_slot` 16、`slot_meta` 20、`nvn_table` 56、`resolve_result` 16、`thread_desc` 48、`host_desc` 32、`audio_config` 24、`platform` 80、`input_event` 32、`app_callbacks` 48、`app_desc` 40、`svc_frame` 96。
 - `Rust panic=abort`；不允许 unwind 穿 FFI；边界函数不 `catch_unwind`。
 - host AArch64 `+reserve-x18`；guest `-ffixed-x18`；thunk/impl/gate 不得读写 x18。

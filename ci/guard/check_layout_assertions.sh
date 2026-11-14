@@ -55,10 +55,10 @@ fi
 # this guard would say so instead of passing.
 #
 # Group labels come from the `/* ---- <label> ---- */` headers. A label may
-# carry a trailing note after ':' ("nva_fence: 16 B"), cut off below. The five
-# version-macro assertions at the end of the file have no header of their own
-# and therefore count under the last one (SVC, 10 rather than 5). That is the
-# file as it stands; this ticket adds no assertion and reorders none.
+# carry a trailing note after ':' ("nva_fence: 16 B"), cut off below. The
+# version-macro assertions at the end of the file have no header of their own and
+# therefore count under the last one (SVC). Counts are not repeated here on
+# purpose: the numbers live in layout-assertions.txt and nowhere else.
 actual=$(awk '
   /^\/\* ---- / {
     label = $0

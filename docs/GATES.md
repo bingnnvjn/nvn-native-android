@@ -52,9 +52,9 @@
 
 ### 2.4 计数字段追加（已落地：#90）
 
-`nva_stats` 在 #90 从 56 B / v1 升到 **96 B / v2**（`nva_abi.h:135`）：v1 的 56 B 前缀一个字节不动，下列九个 `uint32_t` 按本表顺序尾部追加，`NVA_STATS_VERSION = 2`。布局由 `abi_layout_check.c` 的 11 条断言钉住（sizeof 96 + 10 条 offset），Rust 镜像同数，账本 `total 86 / nva_stats 11 / SVC 11`。
+`nva_stats` 在 #90 从 56 B / v1 升到 **96 B / v2**（`nva_abi.h:137`）：v1 的 56 B 前缀一个字节不动，下列九个 `uint32_t` 按本表顺序尾部追加，`NVA_STATS_VERSION = 2`。布局由 `abi_layout_check.c` 的 11 条断言钉住（sizeof 96 + 10 条 offset），Rust 镜像同数，账本 `total 86 / nva_stats 11 / SVC 11`。
 
-版本口径：**布局层兼容**（旧二进制读前 56 B、按 `version` 分支仍成立），**运行时只认当前版本**——`nva_gfx_get_stats` 对 `version != 2` 返回 `NVA_ERR_INVALID_ARGUMENT`，v1 调用方被硬拒。这不是缺陷，是 #37 的裁定（`ARCHITECTURE.md` §7.4）。
+版本口径：**布局层兼容**（旧二进制读前 56 B、按 `version` 分支仍成立），**运行时只认当前版本**——`nva_gfx_get_stats` 对 `version != 2` 返回 `NVA_ERR_INVALID_ARGUMENT`，v1 调用方被硬拒。这不是缺陷，是 #37 的裁定（`docs/ARCHITECTURE.md` §7.4）。
 
 九个字段的生产值由 #93（首帧上屏）与 #96 填；在那之前运行时把它们写 0，调用方不会读回未初始化内存。
 
@@ -232,4 +232,4 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 - v7：§3 变异测试的第 1 项改成「改一条 `_Static_assert` 使其失败」——按原措辞删一条断言不会红（#47 实测）；§9 记「无断言清单守卫」缺口。判据值不变。
 - v8：§3/§8 的旧字段名改成实际输出名 `validation_errors`（#48，D9）。判据值不变。
 - v9：布局断言清单守卫落地（#49）——`guard` job 新增 `check_layout_assertions.sh`，钉住 76 条与 11 个分组的逐项条数；§3 变异测试回到「删一条 `_Static_assert`」；§9 把「无断言清单守卫」换成更窄的一条（守条数，不守断言内容）；`README.md` 的 ABI 清单加 `ci/guard/layout-assertions.txt`。判据值不变。
-- v10：#90 落地 §2.4 的九字段追加——`nva_stats` 96 B / `NVA_STATS_VERSION = 2`，C/Rust 各 9 条 offset 断言 + 1 条版本断言，账本 86/11/11；`ARCHITECTURE.md` §7.4 的断言清单按实际 19 个结构体重列；`nva_gfx_get_stats` 只认当前版本的口径写进 §2.4/§8。判据值不变。
+- v10：#90 落地 §2.4 的九字段追加——`nva_stats` 96 B / `NVA_STATS_VERSION = 2`，C/Rust 各 9 条 offset 断言 + 1 条版本断言，账本 86/11/11；`ARCHITECTURE.md` §7.4 的断言清单按实际 19 个结构体重列；`nva_gfx_get_stats` 只认当前版本的口径写进 §2.4 与 `docs/ARCHITECTURE.md` §7.4。判据值不变。

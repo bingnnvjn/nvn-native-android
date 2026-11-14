@@ -190,7 +190,8 @@ pub const NVA_GFX_CAP_CONDITIONAL_QUERY: u32 = 0x2;
 
 /// 96 B. The v1 prefix is the frozen 56 B layout; v2 appends the nine `u32`
 /// device counters from `docs/GATES.md` §2.4 and pads to 96 B to keep the
-/// `u64` fields 8-byte aligned.
+/// `u64` fields 8-byte aligned. The nine read as zero until #93/#96 produce
+/// them.
 #[repr(C)]
 pub struct nva_stats {
     pub size: u32,
@@ -204,16 +205,23 @@ pub struct nva_stats {
     pub frames: u64,
     pub draw_calls: u64,
     pub submits: u64,
-    // v2 device counters (GATES §2.4). Zero when the implementation does not
-    // produce them.
+    /// Frames presented. Differs from `frames` when a frame is skipped.
     pub presents: u32,
+    /// attach/detach generation.
     pub surface_generation: u32,
+    /// Shader variants the cache did not hold.
     pub missing_variants: u32,
+    /// Draws skipped because a variant was missing.
     pub draw_skipped: u32,
+    /// Audio underruns.
     pub xruns: u32,
+    /// Input events delivered.
     pub input_events: u32,
+    /// Input events the guest consumed.
     pub input_consumed: u32,
+    /// Guest traps into the host.
     pub guest_svc_count: u32,
+    /// Draws whose caller was in the guest X range (the thunk records x30).
     pub draw_caller_in_guest: u32,
 }
 
@@ -534,7 +542,6 @@ nva_sa!(nva_stats, input_events, 76);
 nva_sa!(nva_stats, input_consumed, 80);
 nva_sa!(nva_stats, guest_svc_count, 84);
 nva_sa!(nva_stats, draw_caller_in_guest, 88);
-const _: () = assert!(NVA_STATS_VERSION == 2, "nva_stats version");
 
 // ---- NVN ----
 nva_sa!(nva_nvn_slot, 16);
@@ -594,6 +601,7 @@ nva_sa!(nva_svc_frame, flags, 92);
 const _: () = assert!(NVA_ABI_VERSION == 1, "NVA_ABI_VERSION");
 const _: () = assert!(NVA_HOST_SERVICES_VERSION == 2, "NVA_HOST_SERVICES_VERSION");
 const _: () = assert!(NVA_GFX_DESC_VERSION == 2, "NVA_GFX_DESC_VERSION");
+const _: () = assert!(NVA_STATS_VERSION == 2, "NVA_STATS_VERSION");
 const _: () = assert!(NVA_NVN_TABLE_VERSION == 2, "NVA_NVN_TABLE_VERSION");
 const _: () = assert!(NVA_ERR_TIMEOUT == 8, "NVA_ERR_TIMEOUT");
 
