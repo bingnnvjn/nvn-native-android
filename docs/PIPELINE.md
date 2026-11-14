@@ -252,8 +252,8 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 分叉。逐字重复合计 5 行。
 
 **决定：暂不抽 `ci/guard/pin_tests.sh`。** 抽取能换来两样：`shellcheck` 覆盖，和只有一份实现。
-后者的价钱是本节的脚本表加一行、`test_guards.sh` 加自测（`guard` 没有 cargo，脚本必须是纯 shell，
-并按 `check_workspace.sh` 的做法开 test seam）、以及 YAML 与脚本之间多一层间接。名单、日志、
+后者的价钱是 §7 的脚本表加一行、`test_guards.sh` 加自测（`guard` 没有 cargo，脚本必须是纯 shell、
+按 `check_workspace.sh` 的做法开 test seam）、以及 YAML 与脚本之间多一层间接。名单、日志、
 前缀三项参数各自独立取值，抽成脚本也消不掉差异——5 行逐字重复换不动上面那堆。
 
 **什么时候改这个决定**（任一条发生就抽）：
@@ -265,7 +265,8 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
   分组）。
 
 内联 shell 没有静态检查：`ci.yml` 的 `shellcheck -S warning ci/guard/*.sh shell/android/*.sh`
-覆盖不到 YAML 的 `run:` 块，全仓也没有 actionlint / yamllint。这是抽取不花成本的那半好处。
+覆盖不到 YAML 的 `run:` 块，全仓也没有 actionlint / yamllint。抽取的两样好处里，这一样是内联
+永远拿不到的。
 
 ## 8. 不做什么
 
