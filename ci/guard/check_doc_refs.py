@@ -5,6 +5,11 @@ The repo cites sections as `docs/GATES.md §2.1`, `GATES §2.1`, `ARCH §7.4`,
 etc. A stale section number is invisible to every other gate, so it survives
 review and sends the next reader to the wrong place. Three-level refs such as
 `PIPELINE §4.3.4` point at list items rather than headings, so they are skipped.
+
+A section number that heads two places in one file is rejected for the same
+reason: `§7.1` then names two different sections, and the reader who follows it
+lands in whichever one they happen to scroll to first. Headings used to be
+collected into a set, which silently collapsed the duplicate (#71).
 """
 from __future__ import annotations
 
@@ -48,13 +53,14 @@ def repo_files(root: pathlib.Path) -> list[pathlib.Path]:
     return [root / name.decode() for name in out.split(b"\0") if name]
 
 
-def headings(path: pathlib.Path) -> set[str]:
-    sections: set[str] = set()
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+def heading_numbers(lines: list[str]) -> dict[str, list[int]]:
+    """Section number -> every line it heads, in file order."""
+    found: dict[str, list[int]] = {}
+    for lineno, line in enumerate(lines, 1):
         match = HEADING_RE.match(line)
         if match:
-            sections.add(match.group(1))
-    return sections
+            found.setdefault(match.group(1), []).append(lineno)
+    return found
 
 
 def main() -> int:
@@ -70,6 +76,7 @@ def main() -> int:
     cache: dict[pathlib.Path, set[str]] = {}
     checked = 0
     failures: list[tuple[pathlib.Path, int, str, str]] = []
+    duplicates: list[tuple[pathlib.Path, str, list[int]]] = []
 
     for path in repo_files(root):
         try:
@@ -81,9 +88,14 @@ def main() -> int:
         rel = path.relative_to(root)
         if rel.as_posix() in IGNORE:
             continue
-        for lineno, line in enumerate(
-            data.decode("utf-8", errors="ignore").splitlines(), 1
-        ):
+        lines = data.decode("utf-8", errors="ignore").splitlines()
+        if path.suffix.lower() == ".md":
+            numbers = heading_numbers(lines)
+            cache[path] = set(numbers)
+            for number, linenos in numbers.items():
+                if len(linenos) > 1:
+                    duplicates.append((rel, number, linenos))
+        for lineno, line in enumerate(lines, 1):
             for match in REF_RE.finditer(line):
                 checked += 1
                 target = root / (
@@ -96,7 +108,13 @@ def main() -> int:
                     )
                     continue
                 if target not in cache:
-                    cache[target] = headings(target)
+                    cache[target] = set(
+                        heading_numbers(
+                            target.read_text(
+                                encoding="utf-8", errors="ignore"
+                            ).splitlines()
+                        )
+                    )
                 if section not in cache[target]:
                     failures.append(
                         (
@@ -107,8 +125,21 @@ def main() -> int:
                         )
                     )
 
+    for rel, number, linenos in duplicates:
+        for again in linenos[1:]:
+            print(
+                f"{rel}:{again}: section §{number} appears again "
+                f"(first at line {linenos[0]})",
+                file=sys.stderr,
+            )
     for rel, lineno, ref, why in failures:
         print(f"{rel}:{lineno}: {ref!r}: {why}", file=sys.stderr)
+    if duplicates:
+        print(
+            f"doc refs: {len(duplicates)} duplicate heading(s), {checked} refs checked",
+            file=sys.stderr,
+        )
+        return 1
     if failures:
         print(f"doc refs: {len(failures)} dangling of {checked} checked", file=sys.stderr)
         return 1
