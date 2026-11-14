@@ -55,7 +55,7 @@
 | `pc-x86_64` | ✅ | ✅（build-essential） | — | ✅ | ✅（镜像自带） |
 | `arm64-linux` | ✅（原生 AArch64） | ✅（原生 AArch64） | — | ✅ | ✅（镜像自带） |
 | `android-aarch64` | ✅（+`aarch64-linux-android` target） | ✅（NDK clang） | ✅ | ✅ | ✅（镜像自带） |
-| `shell-apk` | — | （NDK clang 已配置，无编译 step） | ✅ | — | ✅（镜像自带） |
+| `shell-apk` | ✅（+`aarch64-linux-android` target，#91） | ✅（NDK clang） | ✅ | — | ✅（镜像自带） |
 
 依据是 `ci.yml` 各 job 的 install step（`guard` 的「不编任何东西」见 §2 表与
 `pc-x86_64` 内 #39 注释）；改了 install step 就同步改这张表。

@@ -1,9 +1,11 @@
 //! `nva-runtime` — the runtime behind the platform shell.
 //!
 //! The product C ABI export surface (`nva_app_` / `nva_gfx_` / `nva_host_`)
-//! lives here. Ticket #44 adds exactly what the PC smoke path needs: create a
-//! gfx object, drive one offscreen frame through the NVN entry points, wait for
-//! the fence, and hand the result to `nva-verify`.
+//! is split by seam: this module holds the gfx and host sides plus the NVN
+//! entry points, and `app.rs` holds the shell lifecycle and the window (#91).
+//! Ticket #44 adds exactly what the PC smoke path needs: create a gfx object,
+//! drive one offscreen frame through the NVN entry points, wait for the fence,
+//! and hand the result to `nva-verify`.
 //!
 //! Everything across the crate boundary is `extern "C"` (docs/ARCHITECTURE.md
 //! §7.1). One verifier-only export, `nva_gfx_verify_probe`, is deliberately not
@@ -17,12 +19,12 @@ use core::ptr;
 use std::sync::{Mutex, MutexGuard};
 
 use nva_abi::{
-    nva_app_desc, nva_gfx_caps, nva_gfx_desc, nva_host_desc, nva_nvn_table, nva_stats,
-    NVA_APP_DESC_VERSION, NVA_ERR_DEVICE_LOST, NVA_ERR_INVALID_ARGUMENT, NVA_ERR_TIMEOUT,
-    NVA_ERR_UNSUPPORTED, NVA_GFX_CAPS_VERSION, NVA_GFX_CAP_VULKAN_11, NVA_GFX_DESC_VERSION, NVA_OK,
-    NVA_STATS_VERSION,
+    nva_gfx_caps, nva_gfx_desc, nva_host_desc, nva_nvn_table, nva_stats, nva_status,
+    NVA_ERR_DEVICE_LOST, NVA_ERR_INVALID_ARGUMENT, NVA_ERR_TIMEOUT, NVA_ERR_UNSUPPORTED,
+    NVA_GFX_CAPS_VERSION, NVA_GFX_CAP_VULKAN_11, NVA_GFX_DESC_VERSION, NVA_OK, NVA_STATS_VERSION,
 };
 
+mod app;
 pub mod debug_filter;
 pub mod verify;
 mod vk;
@@ -118,7 +120,7 @@ impl Gfx {
 pub unsafe extern "C" fn nva_gfx_create(
     desc: *const nva_gfx_desc,
     out: *mut *mut Gfx,
-) -> nva_abi::nva_status {
+) -> nva_status {
     if desc.is_null() || out.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
@@ -189,10 +191,7 @@ pub unsafe extern "C" fn nva_gfx_destroy(gfx: *mut Gfx) {
 // is refused with `NVA_ERR_INVALID_ARGUMENT` rather than overrun. Nothing is
 // retained: the caps are copied out and the borrow ends with the call.
 #[no_mangle]
-pub unsafe extern "C" fn nva_gfx_query_caps(
-    gfx: *mut Gfx,
-    out: *mut nva_gfx_caps,
-) -> nva_abi::nva_status {
+pub unsafe extern "C" fn nva_gfx_query_caps(gfx: *mut Gfx, out: *mut nva_gfx_caps) -> nva_status {
     if gfx.is_null() || out.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
@@ -229,7 +228,7 @@ pub unsafe extern "C" fn nva_gfx_query_caps(
 // `NVA_ERR_INVALID_ARGUMENT`; a failed wait is reported as `NVA_ERR_DEVICE_LOST`
 // and never as success.
 #[no_mangle]
-pub unsafe extern "C" fn nva_gfx_wait_idle(gfx: *mut Gfx) -> nva_abi::nva_status {
+pub unsafe extern "C" fn nva_gfx_wait_idle(gfx: *mut Gfx) -> nva_status {
     if gfx.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
@@ -257,7 +256,7 @@ pub unsafe extern "C" fn nva_gfx_wait_fence(
     gfx: *mut Gfx,
     fence: *const nva_abi::nva_fence,
     timeout_ns: u64,
-) -> nva_abi::nva_status {
+) -> nva_status {
     if gfx.is_null() || fence.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
@@ -290,10 +289,7 @@ pub unsafe extern "C" fn nva_gfx_wait_fence(
 // the first write, so an older or shorter struct is refused with
 // `NVA_ERR_INVALID_ARGUMENT`. Counters are copied out; nothing is retained.
 #[no_mangle]
-pub unsafe extern "C" fn nva_gfx_get_stats(
-    gfx: *mut Gfx,
-    out: *mut nva_stats,
-) -> nva_abi::nva_status {
+pub unsafe extern "C" fn nva_gfx_get_stats(gfx: *mut Gfx, out: *mut nva_stats) -> nva_status {
     if gfx.is_null() || out.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
@@ -342,7 +338,7 @@ pub unsafe extern "C" fn nva_gfx_get_nvn_table(_gfx: *mut Gfx) -> *const nva_nvn
 pub unsafe extern "C" fn nva_gfx_verify_probe(
     gfx: *mut Gfx,
     out: *mut nva_verify_state,
-) -> nva_abi::nva_status {
+) -> nva_status {
     if gfx.is_null() || out.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
@@ -516,41 +512,12 @@ unsafe extern "C" fn nvn_queue_finish(_queue: *mut c_void) {
     // path, so finish does not block here.
 }
 
-// ------------------------------------------------------- app / host
+// ------------------------------------------------------------- host
 //
-// Skeleton entry points: the shell lifecycle and the host surface are later
-// tickets. They exist so the shared library carries all three ABI prefixes
-// (#37 D6), and they fail honestly instead of pretending to succeed.
-
-/// # Safety
-/// `desc` and `out` must be readable/writable as declared.
-// SAFETY: `desc` and `out` are guest-owned and must stay readable/writable for
-// the call; both are null-checked and `size` / `version` are validated before
-// any other field is read. This skeleton always writes NULL to `*out` and
-// returns `NVA_ERR_UNSUPPORTED` (`LOCAL §2`: the failure is the return value,
-// not a panic), so no object is ever handed out to own.
-#[no_mangle]
-pub unsafe extern "C" fn nva_app_create(
-    desc: *const nva_app_desc,
-    out: *mut *mut c_void,
-) -> nva_abi::nva_status {
-    if desc.is_null() || out.is_null() {
-        return NVA_ERR_INVALID_ARGUMENT;
-    }
-    let desc = &*desc;
-    if desc.size < size_of::<nva_app_desc>() as u32 || desc.version != NVA_APP_DESC_VERSION {
-        return NVA_ERR_INVALID_ARGUMENT;
-    }
-    *out = ptr::null_mut();
-    NVA_ERR_UNSUPPORTED
-}
-
-/// # Safety
-/// `app` must be NULL (no app object can be created in this ticket).
-// SAFETY: no app object can be created in this ticket, so the only sound
-// argument is NULL; the body ignores it either way and dereferences nothing.
-#[no_mangle]
-pub unsafe extern "C" fn nva_app_destroy(_app: *mut c_void) {}
+// Skeleton entry points: the host surface is a later ticket. They exist so the
+// shared library carries all three ABI prefixes (#37 D6), and they fail
+// honestly instead of pretending to succeed. The app side of that prefix lives
+// in `app.rs` (#91); the shell lifecycle is no longer a skeleton.
 
 /// # Safety
 /// `desc` and `out` must be readable/writable as declared.
@@ -562,7 +529,7 @@ pub unsafe extern "C" fn nva_app_destroy(_app: *mut c_void) {}
 pub unsafe extern "C" fn nva_host_create(
     desc: *const nva_host_desc,
     out: *mut *mut c_void,
-) -> nva_abi::nva_status {
+) -> nva_status {
     if desc.is_null() || out.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
