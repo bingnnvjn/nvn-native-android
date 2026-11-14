@@ -266,25 +266,6 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 不一致就说明版本不对，别照着读。表里的路径相对本地工作副本的根——`docs/agents/` 是那里的目录，
 不是本仓 `docs/` 的子目录，clone 出来后找不到它属正常。
 
-### 7.1 按名字钉测试：两份内联，暂不抽（2026-11-14）
-
-`pc-x86_64` 里有两段同形的「按名字钉测试」循环，各自内联在 step 中：`nva-runtime unit tests
-(#61, #66)` 与 `nva-verify exit-code matrix (#43)`。骨架 6 行逐字相同（`for name in \` 到
-`done`；`set -euo pipefail` 每个 step 都有，不计入），参数只有三项——测试名名单、日志文件、
-`::error::` 前缀；理由注释的首行也逐字相同，第二行起分叉。逐字重复合计 7 行。
-
-**决定：暂不抽 `ci/guard/pin_tests.sh`。** 两份参数不同且各自稳定，抽取要连带改本节的门禁脚本表、
-给 `test_guards.sh` 加自测、并在 YAML 与脚本之间加一层间接。7 行重复换不来这些成本。
-
-**什么时候改这个决定**（任一条发生就抽）：
-
-- 出现**第三处**按名字钉测试的 step；
-- 这两段之一的骨架需要变复杂（例如要认 `ignored`、要固定测试线程顺序、要按 `--test-threads`
-  分组）。
-
-内联 shell 不被 `shellcheck` 检查——`ci.yml` 的 `shellcheck -S warning ci/guard/*.sh`
-覆盖不到 YAML 里的 `run:` 块。这是抽取唯一实打实的好处，也是上面第二条触发的由来。
-
 ## 8. 不做什么
 
 - 不在 CI 里跑真游戏数据（没有任何 job 接受 XCI/keys）。
