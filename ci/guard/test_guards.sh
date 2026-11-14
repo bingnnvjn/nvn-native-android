@@ -355,6 +355,23 @@ printf 'bad target: docs/MISSING.md §1\n' >"$DOCS_REPO/nope.md"
 git -C "$DOCS_REPO" add -A
 expect_rc 1 python3 ci/guard/check_doc_refs.py --root "$DOCS_REPO"
 
+# A number that heads two places in one file must fail: `§2.1` then names both,
+# and the reader who follows it lands wherever they scroll first. The check used
+# to collect headings into a set, which collapsed the duplicate (#71).
+DUP_REPO=$TMP/docdup
+mkdir -p "$DUP_REPO/docs"
+git -C "$DUP_REPO" init -q
+printf '# D\n\n## 2. Two\n\n### 2.1 Sub\n\n### 2.1 Sub again\n' >"$DUP_REPO/docs/DUP.md"
+git -C "$DUP_REPO" add -A
+expect_out "section §2.1 appears again" python3 ci/guard/check_doc_refs.py --root "$DUP_REPO"
+printf '# D\n\n## 2. Two\n\n### 2.1 Sub\n\n### 2.2 Other\n' >"$DUP_REPO/docs/DUP.md"
+# The same number in two different files stays legal: each file has one §2.1,
+# and both refs resolve to their own document.
+printf '# E\n\n### 2.1 Sub\n' >"$DUP_REPO/docs/OTHER.md"
+printf 'refs: docs/DUP.md §2.1 and docs/OTHER.md §2.1\n' >"$DUP_REPO/note.md"
+git -C "$DUP_REPO" add -A
+expect_rc 0 python3 ci/guard/check_doc_refs.py --root "$DUP_REPO"
+
 # --- check_shell_apk.sh ----------------------------------------------------
 # It must fail closed: a missing APK, or a missing Android toolchain, has to
 # exit 2 instead of silently passing. The positive path needs a real APK, so it
