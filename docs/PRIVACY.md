@@ -9,7 +9,7 @@
 > `CODING_STANDARDS.md`、`docs/{RISKS,device-adreno725,botw-assets,botw-nvn-usage,shared-fonts}.md`、
 > `docs/agents/`、`docs/adr/`。
 > 仓库现在只含：`crates/`、`include/`、`shell/`、`ci/`、`spike/abi-slice/`、`tools/mng/`、
-> `docs/{ARCHITECTURE,GATES,PIPELINE,PRIVACY,DERIVED,RELEASE-NOTES-TEMPLATE}.md`、
+> `docs/{ARCHITECTURE,GATES,PIPELINE,PRIVACY,DERIVED,RELEASE-NOTES-TEMPLATE,DEVICE-LOGS}.md`、
 > `LICENSE`、`NOTICE`、`README.md`。
 
 ## 0. 口径

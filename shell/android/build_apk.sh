@@ -82,10 +82,14 @@ echo "==> native library"
 cp "$RUNTIME_SO" "$OUT/lib/arm64-v8a/"
 
 echo "==> Java"
+# Both sources listed, not a glob: javac's output set is what d8 packages, and
+# a class that silently does not get compiled would only fail on a phone.
+# LogProvider (#99) is the share sheet's read end of the device log.
 javac -source 8 -target 8 -Xlint:-options \
     -bootclasspath "$PLATFORM/android.jar" \
     -d "$BUILD/classes" \
-    android/java/com/bingnnvjn/nva/MainActivity.java
+    android/java/com/bingnnvjn/nva/MainActivity.java \
+    android/java/com/bingnnvjn/nva/LogProvider.java
 
 echo "==> dex"
 mapfile -t CLASS_FILES < <(find "$BUILD/classes" -name '*.class' | sort)

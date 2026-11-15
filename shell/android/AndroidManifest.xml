@@ -20,6 +20,13 @@
   arrives with the new geometry, and the generation advances (#93 rebuilds the
   swapchain on that signal). `screenSize` and `smallestScreenSize` cover the
   API 13+ spelling; `orientation` alone is not enough.
+
+  The share entry (#99) is not a permission: nothing here is declared and
+  nothing is added to the app. `exported="false"` keeps every other app out, and
+  `grantUriPermissions="true"` is what lets the share sheet's receiver read the
+  one log file for the length of one activity. The authority is spelled out
+  rather than derived, because it is fixed at build time and a typo here would
+  only show up as a failed share on a phone.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.bingnnvjn.nva">
@@ -37,5 +44,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <provider
+            android:name=".LogProvider"
+            android:authorities="com.bingnnvjn.nva.logs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
