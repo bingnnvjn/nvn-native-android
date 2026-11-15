@@ -22,13 +22,13 @@ Android 不允许应用重启自己，也不允许后台拉起界面。省掉的
 
 分享走 `LogProvider`，URI 是 `content://com.bingnnvjn.nva.logs/nva-shell.log`。
 **provider 不是权限**：manifest 里没有声明任何权限；`<provider>` 声明
-`exported="false"` + `grantUriPermissions="true"`，读权限只覆盖那一个 URI、
-只在这一次分享的接收方生命周期内有效。
+`exported="false"` + `grantUriPermissions="true"`，读权限只在这一次分享的接收方生命周期内
+有效。manifest 层的 grant 是 authority 级的，「只服务这一个名字」是 provider 自己用代码钉死的
+（`openFile` / `query` / `getType` 三个都校验路径）。
 
 **为什么不是 `FileProvider`**：票面写的是 FileProvider，但那个前提在这个构建里不成立——
 javac 的 bootclasspath 上只有 `android.jar`，没有 androidx；也没有 `res/` 可以挂
-`@xml/file_paths`。所以 provider 是手写的，只用 framework 类，并且把「只服务这一个名字」
-用代码钉死（`openFile` / `query` / `getType` 三个都校验路径）。
+`@xml/file_paths`。所以 provider 是手写的，只用 framework 类。
 
 文件落在 `getFilesDir()`（应用私有目录），不是外部存储：外部目录在 Android 11+ 的文件管理器
 里看不见，而既然本来就要走 provider，私有的更省事，也更不容易被别的应用读到。
@@ -44,7 +44,8 @@ javac 的 bootclasspath 上只有 `android.jar`，没有 androidx；也没有 `r
 13:40:18.003 detached (generation=1) status=0
 ```
 
-- **run 头**：`=== run N <ISO8601> ===`，每次 create 尝试写一行（create 失败也写）。
+- **run 头**：`=== run N <ISO8601> ===`，每次 create 尝试写一行（create 失败也写；唯一的例外是
+  「app 已存在」的早退拒绝，那条路连文件都不开）。
   N 是「当前文件里已有的 run 头数 + 1」。ISO 时间戳带毫秒和时区偏移（如 `+08:00`），
   **两个文件之间靠它排序，不靠 N**（见 §5）。
 - **事件行**：`HH:MM:SS.mmm <事件> [generation=N] [WxH] status=N`。时间是本机墙钟，
@@ -65,6 +66,7 @@ javac 的 bootclasspath 上只有 `android.jar`，没有 androidx；也没有 `r
 | `NVA shell … on <型号> / Android <版本>` | Java | 设备行，每次 Activity 创建记一次，标明这份日志来自哪台机器哪个版本 |
 | `surface has no size yet: WxH` / `surface changed with no size yet: WxH` | Java | holder 还没量出尺寸，这次根本不进 JNI |
 | `share failed: …` | Java | 分享面板没起来（没装可接收的 App，或 Activity 已经没了） |
+| `native call failed: <异常>` | Java | `shellInfo` 抛了异常（典型是库没加载成功），设备行里会带着它 |
 
 **拒绝只记一行，在 C 侧**（`<事件> failed: status=N`）。Java 不再抄一遍：同一次失败
 出现两条、措辞还不一样，读的人只会当成两个事件。

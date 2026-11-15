@@ -25,8 +25,8 @@ import android.view.View;
  *
  * <p>No lambdas here: the no-Gradle build puts {@code android.jar} on the javac
  * bootclasspath, which has no {@code LambdaMetafactory}
- * (CODING_STANDARDS.md, "Android / JNI"). The callback below is an anonymous
- * inner class for that reason, not for style.
+ * (CODING_STANDARDS.md, "Android / JNI"). Both callbacks below are named inner
+ * classes for that reason, not for style.
  *
  * <p>Surface generation. The shell owns the counter (§3.7), and the rule is:
  *
