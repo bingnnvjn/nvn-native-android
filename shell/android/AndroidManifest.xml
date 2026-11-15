@@ -21,8 +21,8 @@
   swapchain on that signal). `screenSize` and `smallestScreenSize` cover the
   API 13+ spelling; `orientation` alone is not enough.
 
-  The share entry (#99) is not a permission: nothing here is declared and
-  nothing is added to the app. `exported="false"` keeps every other app out, and
+  The share entry (#99) is not a permission: it declares none and adds none to
+  the app. `exported="false"` keeps every other app out, and
   `grantUriPermissions="true"` is what lets the share sheet's receiver read the
   one log file for the length of one activity. The authority is spelled out
   rather than derived, because it is fixed at build time and a typo here would

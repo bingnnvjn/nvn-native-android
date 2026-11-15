@@ -71,8 +71,11 @@ echo "==> native library"
 # JNI layer a C ABI caller, so it includes the product header and links the
 # runtime; `-landroid` is where ANativeWindow_fromSurface lives. The runtime
 # itself is built by cargo for aarch64-linux-android (see TARGET_DIR above) —
-# this script does not compile Rust.
+# this script does not compile Rust. -Werror is what turns the `format(printf)`
+# attribute on shell_log into an actual gate: without -Wall it never fires, and
+# a bad format string would otherwise only show up on a phone.
 "$CC" -std=c11 -shared -fPIC -O2 -fno-stack-protector -ffixed-x18 \
+    -Wall -Wextra -Werror \
     -Wl,-soname,libnva_shell_jni.so \
     -I "$REPO/include" \
     android/jni/nva_shell_jni.c \

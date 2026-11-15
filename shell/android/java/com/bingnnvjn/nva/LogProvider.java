@@ -50,7 +50,9 @@ public final class LogProvider extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
-        return "text/plain";
+        // null is the convention for "this provider does not know that URI",
+        // and it keeps getType as narrow as openFile: one name, one type.
+        return NAME.equals(uri.getLastPathSegment()) ? "text/plain" : null;
     }
 
     /**
@@ -62,12 +64,23 @@ public final class LogProvider extends ContentProvider {
         return new File(getContext().getFilesDir(), NAME);
     }
 
+    /**
+     * The one name this provider serves, checked the same way by every method
+     * that reads a URI. The manifest does not narrow the grant with
+     * {@code <grant-uri-permission>}, so without this check a grant would
+     * cover any path under the authority — harmless today, but a claim the
+     * docs make and the code should keep true.
+     */
+    private static boolean isServed(Uri uri) {
+        return NAME.equals(uri.getLastPathSegment());
+    }
+
     @Override
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         if (!"r".equals(mode)) {
             throw new FileNotFoundException("read-only provider, mode=" + mode);
         }
-        if (!NAME.equals(uri.getLastPathSegment())) {
+        if (!isServed(uri)) {
             throw new FileNotFoundException("only " + NAME + " is served: " + uri);
         }
         File log = file();
@@ -84,7 +97,13 @@ public final class LogProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
                         String sortOrder) {
-        String[] columns = projection != null
+        if (!isServed(uri)) {
+            throw new IllegalArgumentException("only " + NAME + " is served: " + uri);
+        }
+        // An empty projection would build a zero-column cursor, which
+        // CursorWindow rejects; the callers here (the share sheet) never do
+        // it, and an explicit columns array keeps the row builder honest.
+        String[] columns = projection != null && projection.length > 0
                 ? projection
                 : new String[] {OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE};
         MatrixCursor cursor = new MatrixCursor(columns, 1);

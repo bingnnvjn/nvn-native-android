@@ -31,22 +31,28 @@
  *
  * ## The device log (#99)
  *
- * Every line this file writes goes through `shell_log`, which formats once and
- * hands the same bytes to both exits: logcat, and `<data_dir>/nva-shell.log`.
+ * Every *event* line this file writes goes through `shell_log`, which formats
+ * once and hands the same bytes to both exits: logcat, and
+ * `<data_dir>/nva-shell.log`. (The run header is built and emitted directly.)
  * Formatting once is the point — a log read off the phone and the same run read
  * in `adb logcat` must not be two accounts that disagree. See
  * docs/DEVICE-LOGS.md for how the file is retrieved and what the fields mean.
  *
- * Single writer, no lock. Only `shell_emit` touches `g_log_file`, one whole
- * line per `fwrite`, and the Java side never opens the file at all: its lines
- * come back through `nativeLog`. Two writers would interleave half lines, which
- * is the one thing the ticket rules out. `fflush` runs after every line because
- * the interesting forensics happen after the system kills the process, and a
- * kill discards whatever is still buffered.
+ * One writer, no lock. Only `shell_emit` writes `g_log_file`: `shell_log_open`,
+ * `shell_rotate` and `shell_log_close` merely open, rename and close it, and
+ * `shell_count_runs` reads through a second handle it owns outright. A line is
+ * one `fwrite` including its newline, so a write either lands whole or is
+ * re-measured — never half a line waiting for the next one to complete it.
+ * The Java side never opens the file at all: its lines come back through
+ * `nativeLog`. Two writers would interleave half lines, which is the one thing
+ * the ticket rules out. `fflush` runs after every line because the interesting
+ * forensics happen after the system kills the process, and a kill discards
+ * whatever is still buffered.
  *
  * The file is opened in `appCreate` and closed in `appDestroy`; a line emitted
  * before that — `JNI_OnLoad`, `shellInfo` — reaches logcat only. The run header
- * is written when the file opens, so `app created` is always the line after it.
+ * is written when the file opens, so on a create that succeeds, `app created`
+ * is the line after it.
  */
 #include <jni.h>
 
@@ -95,24 +101,41 @@ static unsigned long g_log_bytes;
 /* Declared ahead of the writer so gcc checks every call site's format string. */
 static void shell_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void shell_rotate(void);
+static void shell_log_close(void);
 
 /*
- * `HH:MM:SS.mmm ` — the prefix on every event line. 0 means the clock could not
- * be read; the line is then dropped rather than written undated, because a
- * forensic line with no time is worse than no line.
+ * One instant, read once, shared by both formatters. Splitting the read between
+ * them would let an event line land under a run header stamped by a different
+ * clock reading.
+ *
+ * 0 on failure. The callers disagree on what that means, on purpose: an event
+ * line is dropped rather than written undated (a forensic line with no time is
+ * worse than no line), while the run header falls back to "unknown" because the
+ * header is the file's anchor and must exist.
  */
-static size_t shell_format_clock(char *out, size_t cap)
+static int shell_now_local(struct tm *out, long *millis)
 {
     struct timespec now;
     if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
         return 0;
     }
+    if (localtime_r(&now.tv_sec, out) == NULL) {
+        return 0;
+    }
+    *millis = now.tv_nsec / 1000000L;
+    return 1;
+}
+
+/* `HH:MM:SS.mmm ` — the prefix on every event line. */
+static size_t shell_format_clock(char *out, size_t cap)
+{
     struct tm local;
-    if (localtime_r(&now.tv_sec, &local) == NULL) {
+    long millis;
+    if (!shell_now_local(&local, &millis)) {
         return 0;
     }
     int n = snprintf(out, cap, "%02d:%02d:%02d.%03ld ", local.tm_hour, local.tm_min,
-                     local.tm_sec, now.tv_nsec / 1000000L);
+                     local.tm_sec, millis);
     if (n <= 0 || (size_t)n >= cap) {
         return 0;
     }
@@ -126,12 +149,9 @@ static size_t shell_format_clock(char *out, size_t cap)
  */
 static size_t shell_format_stamp(char *out, size_t cap)
 {
-    struct timespec now;
-    if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
-        return 0;
-    }
     struct tm local;
-    if (localtime_r(&now.tv_sec, &local) == NULL) {
+    long millis;
+    if (!shell_now_local(&local, &millis)) {
         return 0;
     }
     /* `%z` is the portable spelling; it yields `+0800`, and the colon is ours. */
@@ -141,8 +161,8 @@ static size_t shell_format_stamp(char *out, size_t cap)
     }
     int n = snprintf(out, cap, "%04d-%02d-%02dT%02d:%02d:%02d.%03ld%c%c%c:%c%c",
                      local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour,
-                     local.tm_min, local.tm_sec, now.tv_nsec / 1000000L, zone[0], zone[1],
-                     zone[2], zone[3], zone[4]);
+                     local.tm_min, local.tm_sec, millis, zone[0], zone[1], zone[2], zone[3],
+                     zone[4]);
     if (n <= 0 || (size_t)n >= cap) {
         return 0;
     }
@@ -184,20 +204,47 @@ static void shell_rotate(void)
 
     char rotated[SHELL_LOG_PATH + 2];
     int n = snprintf(rotated, sizeof rotated, "%s.1", g_log_path);
-    if (n <= 0 || (size_t)n >= sizeof rotated || rename(g_log_path, rotated) != 0) {
+    if (n <= 0 || (size_t)n >= sizeof rotated) {
         shell_log("log rotate failed: %s", strerror(errno));
+    } else if (rename(g_log_path, rotated) != 0) {
+        /*
+         * POSIX rename replaces the destination; not every C library does, and
+         * one that refuses would leave the old file at its full size with a
+         * fresh counter — unbounded growth, the thing the limit exists to
+         * prevent. Dropping the previous generation first keeps the promise
+         * either way: one old file, never two, and never a live log that grew
+         * past the limit because rotation kept failing.
+         */
+        if (remove(rotated) != 0 || rename(g_log_path, rotated) != 0) {
+            shell_log("log rotate failed: %s", strerror(errno));
+        }
     }
     g_log_file = fopen(g_log_path, "a");
     if (g_log_file == NULL) {
         shell_log("log reopen failed: %s", strerror(errno));
+        return;
+    }
+    /*
+     * Measured, not assumed zero. A failed rename leaves the old file in place
+     * at its full size; a counter at 0 would let it grow another whole limit
+     * before the next attempt, and fail again — doubling forever, which is the
+     * "unbounded" the ticket rules out. `shell_log_open` measures the same way.
+     */
+    if (fseek(g_log_file, 0, SEEK_END) == 0) {
+        long at = ftell(g_log_file);
+        g_log_bytes = at > 0 ? (unsigned long)at : 0;
     }
 }
 
 /*
- * The only writer. `line` carries no newline; this adds one. Both exits receive
- * these exact bytes, which is what keeps the file and logcat comparable.
+ * The writer: the one place that writes `g_log_file`. `line` holds the text and
+ * `len` its length, with room for a newline behind it; this appends the newline
+ * and hands the whole thing to one `fwrite`, so a line either lands whole or
+ * forces a re-measure — it is never half a line waiting for the next one to
+ * complete it. Both exits receive these exact bytes, which is what keeps the
+ * file and logcat comparable.
  */
-static void shell_emit(const char *line, size_t len)
+static void shell_emit(char *line, size_t len)
 {
     if (len == 0) {
         return;
@@ -207,20 +254,22 @@ static void shell_emit(const char *line, size_t len)
     if (g_log_file == NULL) {
         return;
     }
-    /* Checked before the write, so the file never passes the limit. */
+    /* The newline counts toward the limit, and the check runs before the write,
+     * so the file never passes it. */
     if (g_log_bytes + len + 1 > SHELL_LOG_LIMIT) {
         shell_rotate();
         if (g_log_file == NULL) {
             return;
         }
     }
+    line[len++] = '\n';
     size_t wrote = fwrite(line, 1, len, g_log_file);
-    fputc('\n', g_log_file);
     fflush(g_log_file);
     if (wrote == len) {
-        g_log_bytes += (unsigned long)len + 1;
+        g_log_bytes += (unsigned long)len;
     } else {
-        /* A short write means the count is a guess; re-measure instead. */
+        /* A short write means the count is a guess; re-measure instead of
+         * rotating at a size the file is not actually at. */
         long at = ftell(g_log_file);
         g_log_bytes = at > 0 ? (unsigned long)at : 0;
     }
@@ -233,17 +282,43 @@ static void shell_log(const char *fmt, ...)
     if (used == 0) {
         return;
     }
+    /* Two bytes are kept back for the newline the writer appends and the
+     * terminator, so even a truncated message still fits. */
+    size_t room = sizeof line - used - 2;
     va_list ap;
     va_start(ap, fmt);
-    int n = vsnprintf(line + used, sizeof line - used, fmt, ap);
+    int n = vsnprintf(line + used, room + 1, fmt, ap);
     va_end(ap);
     if (n < 0) {
         return;
     }
-    /* vsnprintf already terminated; this is the length it could write. */
-    size_t room = sizeof line - used;
-    size_t len = used + ((size_t)n < room ? (size_t)n : room - 1);
-    shell_emit(line, len);
+    shell_emit(line, used + ((size_t)n < room ? (size_t)n : room));
+}
+
+/*
+ * The one formatter entry that takes already-built text: Java's lines arrive
+ * here. `text` may hold `%` — it is data, never a format. Newlines and carriage
+ * returns become spaces, because a line break inside Java text would split the
+ * line the writer is about to emit, and a payload starting with `=== run `
+ * would forge a run number. Java only ever sends this file's own diagnostics,
+ * so this is a guard against a future caller, not a workaround for a current
+ * one.
+ */
+static void shell_log_text(const char *text)
+{
+    char line[SHELL_LOG_LINE];
+    size_t used = shell_format_clock(line, sizeof line);
+    if (used == 0) {
+        return;
+    }
+    size_t room = sizeof line - used - 2;
+    size_t n = 0;
+    for (const char *p = text; *p != '\0' && n < room; p++) {
+        line[used + n] = (*p == '\n' || *p == '\r') ? ' ' : *p;
+        n++;
+    }
+    line[used + n] = '\0';
+    shell_emit(line, used + n);
 }
 
 /*
@@ -256,6 +331,14 @@ static void shell_log(const char *fmt, ...)
  */
 static void shell_log_open(const char *dir)
 {
+    /*
+     * A create that lands while a file is still open would leak the old handle
+     * and leave two writers behind it. `appDestroy` closes, so this only fires
+     * if a create ever runs without a destroy in between.
+     */
+    if (g_log_file != NULL) {
+        shell_log_close();
+    }
     if (dir == NULL || dir[0] == '\0') {
         shell_log("no data dir: the log file stays closed");
         return;
@@ -284,9 +367,10 @@ static void shell_log_open(const char *dir)
     if (shell_format_stamp(stamp, sizeof stamp) == 0) {
         snprintf(stamp, sizeof stamp, "unknown");
     }
+    /* One byte kept back for the newline the writer appends. */
     char header[SHELL_LOG_LINE];
-    int h = snprintf(header, sizeof header, "=== run %d %s ===", run, stamp);
-    if (h > 0 && (size_t)h < sizeof header) {
+    int h = snprintf(header, sizeof header - 1, "=== run %d %s ===", run, stamp);
+    if (h > 0 && (size_t)h < sizeof header - 1) {
         shell_emit(header, (size_t)h);
     }
 }
@@ -326,7 +410,7 @@ Java_com_bingnnvjn_nva_MainActivity_shellInfo(JNIEnv *env, jobject thiz)
     (void)thiz;
     /* No status to report: the entry cannot fail. It still logs one line, so
      * every entry point appears in the file with the same shape. */
-    shell_log("shellInfo status=%d", (int)NVA_OK);
+    shell_log("shellInfo status=%u", (unsigned)NVA_OK);
     return (*env)->NewStringUTF(env, "NVA shell " SHELL_VERSION " (JNI_OnLoad ran)");
 }
 
@@ -383,7 +467,7 @@ Java_com_bingnnvjn_nva_MainActivity_appCreate(JNIEnv *env, jobject thiz, jstring
     }
 
     g_app = app;
-    shell_log("app created status=%d", (int)NVA_OK);
+    shell_log("app created status=%u", (unsigned)NVA_OK);
     return (jint)NVA_OK;
 }
 
@@ -403,7 +487,7 @@ static jint lifecycle_step(const char *step, const char *event, nva_status (*cal
     }
     nva_status status = call(g_app);
     if (status == NVA_OK) {
-        shell_log("%s status=%d", event, (int)status);
+        shell_log("%s status=%u", event, (unsigned)status);
     } else {
         shell_log("%s failed: status=%u", step, (unsigned)status);
     }
@@ -489,8 +573,8 @@ Java_com_bingnnvjn_nva_MainActivity_windowAttached(JNIEnv *env, jobject thiz, jo
      * a value from Java, so the attach/detach pair can never name two different
      * windows and the release below always follows a successful detach. */
     g_generation = (uint32_t)generation;
-    shell_log("surface attached (generation=%d) %dx%d status=%d", (int)generation, (int)width,
-              (int)height, (int)NVA_OK);
+    shell_log("surface attached (generation=%d) %dx%d status=%u", (int)generation, (int)width,
+              (int)height, (unsigned)NVA_OK);
     return (jint)NVA_OK;
 }
 
@@ -521,7 +605,7 @@ Java_com_bingnnvjn_nva_MainActivity_windowDetached(JNIEnv *env, jobject thiz)
         ANativeWindow_release(g_window);
         g_window = NULL;
     }
-    shell_log("detached (generation=%u) status=%d", (unsigned)g_generation, (int)NVA_OK);
+    shell_log("detached (generation=%u) status=%u", (unsigned)g_generation, (unsigned)NVA_OK);
     g_generation = 0;
     return (jint)NVA_OK;
 }
@@ -557,16 +641,15 @@ Java_com_bingnnvjn_nva_MainActivity_appDestroy(JNIEnv *env, jobject thiz)
     }
     nva_app_destroy(g_app);
     g_app = NULL;
-    g_generation = 0;
-    shell_log("destroyed status=%d", (int)NVA_OK);
+    shell_log("destroyed status=%u", (unsigned)NVA_OK);
     shell_log_close();
 }
 
 /*
  * The Java side's way into the same file (#99). It does not open the file
  * itself: a second writer would interleave half lines with this one, and the
- * ticket rules that out. `text` is data — it may hold `%` — and is cut at
- * SHELL_LOG_LINE like any other line.
+ * ticket rules that out. The text goes through `shell_log_text`, which treats
+ * it as data and keeps it on one line.
  */
 JNIEXPORT void JNICALL
 Java_com_bingnnvjn_nva_MainActivity_nativeLog(JNIEnv *env, jobject thiz, jstring text)
@@ -579,6 +662,6 @@ Java_com_bingnnvjn_nva_MainActivity_nativeLog(JNIEnv *env, jobject thiz, jstring
     if (chars == NULL) {
         return;
     }
-    shell_log("%s", chars);
+    shell_log_text(chars);
     (*env)->ReleaseStringUTFChars(env, text, chars);
 }

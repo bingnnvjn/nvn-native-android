@@ -63,9 +63,6 @@ public class MainActivity extends Activity {
     /** {@code NVA_OK} from include/nva_abi.h. */
     private static final int NVA_OK = 0;
 
-    /** What each log line starts with when a runtime call is refused. */
-    private static final String REFUSED = "refused: status=";
-
     static {
         // The JNI library links against the runtime, and Android resolves that
         // dependency at load time; loading it first turns a missing library into
@@ -130,36 +127,38 @@ public class MainActivity extends Activity {
         // After the view is in place, so a surface event can never arrive before
         // the runtime has an object to hand it to. This call also opens the log
         // file, which is why the device line comes after it.
-        int status = appCreate(getFilesDir().getAbsolutePath());
-        if (status != NVA_OK) {
-            note("app create " + REFUSED + status);
-        }
+        //
+        // A refusal is recorded once, by the JNI layer, next to the call that
+        // failed: logging it here as well would put two differently-worded
+        // lines on one event, and the ticket asks for one line per entry.
+        appCreate(getFilesDir().getAbsolutePath());
         note(info + " on " + Build.MODEL + " / Android " + Build.VERSION.RELEASE);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        report("start", appStart());
+        // Refusals are recorded by the JNI layer (see onCreate).
+        appStart();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        report("resume", appResume());
+        appResume();
     }
 
     @Override
     protected void onPause() {
         // Before super: the runtime hears about the pause while the surface is
         // still valid, which is the order #93's present loop needs.
-        report("pause", appPause());
+        appPause();
         super.onPause();
     }
 
     @Override
     protected void onStop() {
-        report("stop", appStop());
+        appStop();
         super.onStop();
     }
 
@@ -167,12 +166,6 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         appDestroy();
         super.onDestroy();
-    }
-
-    private void report(String what, int status) {
-        if (status != NVA_OK) {
-            note(what + " " + REFUSED + status);
-        }
     }
 
     /**
@@ -206,13 +199,11 @@ public class MainActivity extends Activity {
             note("surface has no size yet: " + width + "x" + height);
             return;
         }
-        int status = windowAttached(holder.getSurface(), width, height, generation);
-        if (status != NVA_OK) {
-            report("attach", status);
-            return;
+        // See onCreate: the JNI layer owns the record for a refused call.
+        if (windowAttached(holder.getSurface(), width, height, generation) == NVA_OK) {
+            attachedWidth = width;
+            attachedHeight = height;
         }
-        attachedWidth = width;
-        attachedHeight = height;
     }
 
     private boolean hasAttachedWindow() {
@@ -251,7 +242,7 @@ public class MainActivity extends Activity {
             if (!hasAttachedWindow()) {
                 return;
             }
-            report("detach", windowDetached());
+            windowDetached();
             attachedWidth = 0;
             attachedHeight = 0;
         }
