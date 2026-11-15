@@ -11,6 +11,15 @@
   No permissions yet: the L6 whitelist (SAF import + the two foreground-service
   permissions) arrives with the code that needs it. ci/guard/check_manifest.sh
   runs in product mode and rejects anything outside that whitelist.
+
+  configChanges (#91): without it, a rotation destroys and recreates the
+  activity, which destroys the app object and restarts the surface generation at
+  1 — `surfaceChanged` would never be seen by the same instance, and the
+  generation rule the ticket defines would be untestable on a device. With it,
+  rotation stays inside one activity: SurfaceView resizes, `surfaceChanged`
+  arrives with the new geometry, and the generation advances (#93 rebuilds the
+  swapchain on that signal). `screenSize` and `smallestScreenSize` cover the
+  API 13+ spelling; `orientation` alone is not enough.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.bingnnvjn.nva">
@@ -21,6 +30,7 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

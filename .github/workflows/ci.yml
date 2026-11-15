@@ -682,7 +682,41 @@ jobs:
             echo "ANDROID_NDK_HOME=$NDK"
             echo "SHELL_NDK_BIN=$TOOLCHAIN/bin"
             echo "CC_aarch64_linux_android=$TOOLCHAIN/bin/aarch64-linux-android26-clang"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android26-clang"
           } >> "$GITHUB_ENV"
+
+      # #91: the package carries the runtime, so this job needs the same Rust
+      # toolchain android-aarch64 uses. Kept as its own step rather than folded
+      # into the NDK step above so a toolchain failure names Rust, not the NDK.
+      - name: Install Rust stable + Android target
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+          rustup toolchain install 1.97.1
+          rustup default 1.97.1
+          rustup target add aarch64-linux-android
+
+      # nva-runtime's build script compiles its shaders unless NVA_SKIP_SHADERS
+      # is set, and a package must not ship empty blobs; the other three jobs
+      # that build this crate install the same package for the same reason.
+      - name: Install glslang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends glslang-tools
+
+      # ARCHITECTURE §7.4: the host side reserves x18. rustc accepts the feature
+      # through `-C target-feature` but warns that it is being replaced by
+      # `-Zfixed-x18`, which is nightly-only; the spelling here matches
+      # android-aarch64 so the two jobs cannot drift.
+      - name: Build runtime for aarch64-linux-android
+        env:
+          RUSTFLAGS: "-C target-feature=+reserve-x18"
+        run: cargo build -p nva-runtime --release --target aarch64-linux-android
 
       # No Gradle, no CMake, no JDK action: the runner image already has the
       # SDK/build-tools/platforms and a JDK (android-aarch64 relies on the same).
