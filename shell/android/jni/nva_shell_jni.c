@@ -74,7 +74,16 @@
 
 #define SHELL_LOG_TAG "nva-shell"
 #define SHELL_LOG_FILE "nva-shell.log"
-#define SHELL_VERSION "0.1.0-m0a"
+
+/*
+ * The version the phone shows (#103): `build_apk.sh` passes the same string to
+ * `aapt2 --version-name`, so the line below and Android's "App info" agree. The
+ * fallback only covers a compile outside that script — a package built that way
+ * is not a package anyone should install.
+ */
+#ifndef SHELL_VERSION
+#define SHELL_VERSION "0.0 (unversioned build)"
+#endif
 
 /*
  * One line: `HH:MM:SS.mmm ` plus the message. 320 bytes holds the longest line

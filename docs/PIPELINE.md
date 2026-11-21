@@ -111,6 +111,7 @@ runner 镜像都自带，`guard` 直接调用（无 install step），故按可�
 | 权限 | spike 0 个；产品按 L6 白名单（SAF/FGS），逐条审；今天产品 0 个 | 同上 |
 | `debuggable` | spike `true`；产品**属性不存在**（= 默认 `false`） | `check_manifest.sh` 看 badging；`check_shell_apk.sh` 看 xmltree（#46） |
 | 签名 scheme | v2+v3 两条 `true`（v1 在 minSdk 26 下不存在） | `check_manifest.sh` |
+| `versionName` / `versionCode` | `<major>.<minor> (<YYYY-MM-DD>)` / `YYYYMMDD`（§4.4） | 无门禁：`build_apk.sh` 生成并在日志里打印；三个 APK 守卫不读这两个字段 |
 | 体积 | ≤ 32 MB | `scan_apk.sh` |
 
 产品壳的 `product` 模式已实现并在 `shell-apk` job 里调用（#46）：包名、targetSdk、权限白名单、`debuggable` 四项按 `GUARD_MODE=product` 判。注意它的 `debuggable` 判据读 `dump badging` 的 `application-debuggable` 行——这个字段在 build-tools 36 上一次实测里掉过（§9），所以「无 debuggable」的权威断言放在 `check_shell_apk.sh` 的 xmltree 上；badging 那条是补充，不是唯一。
@@ -134,6 +135,18 @@ runner 镜像都自带，`guard` 直接调用（无 install step），故按可�
 **import pack 永远不进 release。** 这条没有例外，写进 release notes 模板。
 
 若将来给 APK 做 attestation：**先签名、后 attest**（attestation 绑 digest，签名改字节），权限要 `id-token: write` + `attestations: write`。v0 不做。
+
+### 4.4 版本号（#103）
+
+装到手机上的包要自己说得出是哪一版。`versionName` 与日志的设备行同源，规则只有两条：
+
+- `shell/android/VERSION` 存 `<major>.<minor>`（今天 `0.2`）。发新包时手改这个文件，别的地方不用动。
+- `build_apk.sh` 取**HEAD 的提交日期**（不是构建墙钟）拼成 `0.2 (2026-11-21)`，`versionCode` 用同一日期的数字形式 `20261121`。同一个提交重复构建得到同一个版本号；乱序构建也不会让 `versionCode` 倒退。
+
+同一个字符串经 `-DSHELL_VERSION` 编进 JNI，所以日志里的 `NVA shell 0.2 (2026-11-21) … on <型号>` 与系统「应用信息」显示的是同一个版本——查一台手机装的是哪版，看日志头或系统设置都行。
+
+`versionName` 里的空格与括号是允许的（`aapt2 --version-name` 原样写入 manifest）。`nva_shell_jni.c` 里的 `#define SHELL_VERSION` 只是不经 `build_apk.sh` 时的兜底（`0.0 (unversioned build)`），那种包本来就不该装。
+
 
 ## 5. import pack 工具：三件套，不是一个大 CLI
 
