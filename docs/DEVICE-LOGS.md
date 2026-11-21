@@ -169,10 +169,12 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
   逐帧记录会把事件埋掉）。两处都是判断，写在 `crates/nva-runtime/src/app.rs` 的模块注释里。
 - **#93 之后多两行统计。** 每次 attach 成功、每次 detach 成功后，壳各读一次
   `nva_app_get_stats` 并写一行 `attach stats presents=N generation=G submits=S` /
-  `detach stats presents=N generation=G submits=S`。`presents` 是运行时渲染线程的上屏次数：
-  attach 那行正常 ≥1（运行时在 attach 里等首帧最多 1 秒），detach 那行是这一轮的最后值，
-  HOME 之后不再增长。`generation` 是**粘性**的，detach 不清零，所以「最后一代是多少」与
-  「现在有没有窗口」是两件事——#94 的 JSON 会用 `generation` 加一个自己的 `attached`
-  字段把两者分开。#94 会把这两行换成为 JSON，字段契约以那张票为准，别在这里加解析器。
-  这两个时刻之外，运行时**不会**从渲染线程写任何行：日志文件仍然只有一个写者（本线程）。
+  `detach stats presents=N generation=G submits=S`。`presents` 是运行时渲染线程的上屏次数，
+  **进程内累计、不按 attach 轮次清零**：attach 那行正常 ≥1（运行时在 attach 里等首帧最多 1 秒），
+  detach 那行是这个 run 的累计值，HOME 之后不再增长；要按轮次比较（例如「这一轮上了多少帧」）
+  得自己取两次快照做差，别指望 detach 行的数字从 0 开始。`generation` 是**粘性**的，detach
+  不清零，所以「最后一代是多少」与「现在有没有窗口」是两件事——#94 的 JSON 会用 `generation`
+  加一个自己的 `attached` 字段把两者分开。#94 会把这两行换成为 JSON，字段契约以那张票为准，
+  别在这里加解析器。这两个时刻之外，运行时**不会**从渲染线程写任何行：日志文件仍然只有一个
+  写者（本线程）。
 

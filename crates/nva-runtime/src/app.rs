@@ -221,8 +221,15 @@ struct State {
 ///
 /// Behind one `Arc` rather than two fields of `App` because the thread must not
 /// hold a pointer into a value the shell owns by raw pointer: one allocation,
-/// two owners, stable addresses. The counters publish no other data, so
-/// `Relaxed` is enough — a snapshot is a sample, not a synchronisation point.
+/// two owners, stable addresses.
+///
+/// `Relaxed` is sufficient by construction, and both readers already have a
+/// happens-before edge to the increments. On attach, the loop calls
+/// `record_present` before `Progress::presented`, which takes the mutex that
+/// `Progress::wait` acquires — release/acquire on the same lock publishes the
+/// count. On detach, `RenderLoop::stop_and_join` joins the thread that did the
+/// increment. Nothing else is published alongside the counter, so no stronger
+/// ordering buys anything.
 #[derive(Default)]
 pub(crate) struct RenderCounters {
     presents: AtomicU32,

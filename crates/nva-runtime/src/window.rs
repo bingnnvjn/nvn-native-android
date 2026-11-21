@@ -16,10 +16,11 @@
 //!
 //! ## Vulkan 1.1
 //!
-//! The target device is an Adreno 725 reporting Vulkan 1.1.128 with
-//! `maxViewports = 1` and no dynamic rendering (#26), so the clear goes through
-//! a classic render pass with one attachment. Nothing here needs more than one
-//! viewport, and nothing calls `vkCmdBeginRendering`.
+//! The target device is an Adreno 725 reporting Vulkan 1.1.128 with no dynamic
+//! rendering and `maxViewports = 1` (#26), so the clear goes through a classic
+//! render pass with one attachment. There is no pipeline here, hence no
+//! viewport to configure, so `maxViewports = 1` is not a constraint on this
+//! path; nothing calls `vkCmdBeginRendering` either.
 //!
 //! ## What the render thread may say
 //!
@@ -68,17 +69,12 @@ pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long one `vkAcquireNextImageKHR` may block before the loop re-checks
 /// `stop`.
 ///
-/// An infinite wait would be the spec-idiomatic choice and would deadlock
-/// `detach`: FIFO stops handing images out once the compositor stops consuming
-/// them (HOME with the surface still alive), and `detach` joins this thread
-/// from the shell's main thread. This timeout bounds *that wait* and nothing
-/// else — `wait_for_fences` and `device_wait_idle` stay unbounded on purpose,
-/// because a device that stops signalling reports `VK_ERROR_DEVICE_LOST`
-/// instead of hanging, and a lost device is the case they exist to report.
-///
-/// 20 ms means at most 50 wakeups a second while the loop is idle, and keeps
-/// the join inside the ≤50 ms the UI may block (`docs/ARCHITECTURE.md` §3.7)
-/// with room for one frame's fence wait.
+/// 20 ms bounds only the acquire wait, so an idle loop re-checks `stop` 50
+/// times a second. It does **not** bound `detach`: `wait_for_fences` and the
+/// `device_wait_idle` in `Drop` have no upper bound, and Vulkan offers no
+/// timeout for either. In the normal path the fence has already been signalled,
+/// so the join is dominated by the 20 ms acquire; a wedged GPU is a case no
+/// Vulkan call can bound, and `detach` inherits that.
 const ACQUIRE_TIMEOUT_NS: u64 = 20_000_000;
 
 /// The clear colour behind `0xff00ff00`.
@@ -421,8 +417,12 @@ unsafe fn present_loop(job: &RenderJob) -> Result<(), String> {
             Err(PresentError::OutOfDate) => {
                 // Acquiring again would fail the same way; the shell destroys
                 // the surface next, which turns into a detach. Stopping here
-                // keeps the loop from spinning on a dead swapchain.
-                job.progress.note(String::from(
+                // keeps the loop from spinning on a dead swapchain. `fail`
+                // rather than `note`: before the first frame this is the root
+                // cause `attach` should print straight away (and it wakes the
+                // wait instead of letting it run out and report "not ready in
+                // 1s" first); after it, `fail` turns into a detach note.
+                job.progress.fail(String::from(
                     "the swapchain went out of date; the render loop stopped",
                 ));
                 return Ok(());
@@ -782,11 +782,15 @@ impl Drop for Presenter {
         // SAFETY: every handle here was created by `new` on this thread, and
         // this is the only place any of them is destroyed — the two `Option`
         // reads are "did `new` get that far", not a second owner. The device is
-        // idle first, so no submission still references them. The framebuffers
-        // go before the views they name and before the render pass they use;
-        // the device before the surface and the instance; `_entry` is a field,
-        // so the loader library outlives `vkDestroyInstance`. A handle that was
-        // never created is null, which every `destroy_*` call accepts.
+        // idle first, so no submission still references them. Every child is
+        // destroyed before the device (VUID-vkDestroyDevice-device-00378): the
+        // framebuffers before the views they name and before the render pass
+        // they use, the swapchain before the device, and the device before the
+        // surface and the instance. A swapchain that `create_swapchain` could
+        // not hand over was destroyed there, so nothing here has to know about
+        // it. `_entry` is a field, so the loader library outlives
+        // `vkDestroyInstance`. A handle that was never created is null, which
+        // every `destroy_*` call accepts.
         unsafe {
             if let Some(device) = &self.device {
                 let _ = device.device_wait_idle();
@@ -996,10 +1000,19 @@ unsafe fn create_swapchain(
     let handle = loader
         .create_swapchain(&create_info, None)
         .map_err(|error| format!("vkCreateSwapchainKHR: {error}"))?;
-    let images = loader
-        .get_swapchain_images(handle)
-        .map_err(|error| format!("vkGetSwapchainImagesKHR: {error}"))?;
+    // The swapchain exists and the `Swapchain` that would own it does not, so
+    // each early return below destroys it first: leaving it alive and then
+    // destroying the device is VUID-vkDestroyDevice-device-00378 (every child
+    // object must be gone), which `Presenter::drop` cannot repair afterwards.
+    let images = match loader.get_swapchain_images(handle) {
+        Ok(images) => images,
+        Err(error) => {
+            loader.destroy_swapchain(handle, None);
+            return Err(format!("vkGetSwapchainImagesKHR: {error}"));
+        }
+    };
     if images.is_empty() {
+        loader.destroy_swapchain(handle, None);
         return Err(String::from("the swapchain created no images"));
     }
 
@@ -1035,15 +1048,19 @@ unsafe fn create_swapchain(
             .dst_stage_mask(vk::PipelineStageFlags::BOTTOM_OF_PIPE)
             .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE),
     ];
-    let render_pass = device
-        .create_render_pass(
-            &vk::RenderPassCreateInfo::default()
-                .attachments(std::slice::from_ref(&attachment))
-                .subpasses(std::slice::from_ref(&subpass))
-                .dependencies(&dependencies),
-            None,
-        )
-        .map_err(|error| format!("vkCreateRenderPass: {error}"))?;
+    let render_pass = match device.create_render_pass(
+        &vk::RenderPassCreateInfo::default()
+            .attachments(std::slice::from_ref(&attachment))
+            .subpasses(std::slice::from_ref(&subpass))
+            .dependencies(&dependencies),
+        None,
+    ) {
+        Ok(render_pass) => render_pass,
+        Err(error) => {
+            loader.destroy_swapchain(handle, None);
+            return Err(format!("vkCreateRenderPass: {error}"));
+        }
+    };
 
     Ok(Swapchain {
         handle,
