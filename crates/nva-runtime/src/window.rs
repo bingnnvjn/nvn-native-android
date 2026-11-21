@@ -70,8 +70,10 @@ pub(super) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 /// An infinite wait would be the spec-idiomatic choice and would deadlock
 /// `detach`: FIFO stops handing images out once the compositor stops consuming
 /// them (HOME with the surface still alive), and `detach` joins this thread
-/// from the shell's main thread. A finite wait bounds that join to one timeout.
-const ACQUIRE_TIMEOUT_NS: u64 = 100_000_000;
+/// from the shell's main thread. The finite wait bounds that join, and 20 ms
+/// keeps the whole detach inside the ≤50 ms the UI may block
+/// (`docs/ARCHITECTURE.md` §3.7) with room for one frame's fence wait.
+const ACQUIRE_TIMEOUT_NS: u64 = 20_000_000;
 
 /// The clear colour behind `0xff00ff00`.
 const CLEAR: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
