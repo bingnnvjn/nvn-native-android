@@ -19,7 +19,9 @@
 //! ends of this seam interleaved (`docs/DEVICE-LOGS.md` §8). The callback always
 //! runs after the state guard is dropped: it reaches a file write, and holding
 //! the mutex across it would deadlock the moment a shell called back into
-//! `nva_app_*` from there.
+//! `nva_app_*` from there. It runs synchronously, on whichever thread called the
+//! export — never queued for later — so a shell that writes a file from it is
+//! writing on the caller's thread.
 //!
 //! A shell that passes no platform logs nothing, which is not an error: the
 //! seam is optional (`desc.platform` may be NULL). Two silences are deliberate.
@@ -248,6 +250,18 @@ pub struct App {
     platform: PlatformSink,
 }
 
+impl App {
+    /// Says one already-decided line and hands back its verdict.
+    ///
+    /// Every export ends here, which is what keeps the announcement outside the
+    /// state guard: the guard is dropped where the `Outcome` was built, and this
+    /// runs afterwards.
+    fn announce(&self, outcome: &Outcome) -> nva_status {
+        self.platform.say(outcome.level, &outcome.text);
+        outcome.status
+    }
+}
+
 /// Locks the app state.
 ///
 /// Nothing holds this guard across a call that can panic: every critical
@@ -273,11 +287,11 @@ fn lock(app: &App) -> Result<MutexGuard<'_, State>, nva_status> {
 // before any other field is read, so a short or stale struct fails with
 // `NVA_ERR_INVALID_ARGUMENT` instead of being dereferenced. `desc.callbacks` and
 // `desc.platform`, when non-NULL, have their own `size` / `version` checked
-// before they are read. Nothing in `desc` is retained: `data_dir` is not stored,
-// and the callback pointers and the two `nva_platform` fields this module uses
-// (`user`, `log`) are copied, so none of the shell's structs has to outlive the
-// call on this module's account. On success `*out` owns the boxed `App`, and
-// only `nva_app_destroy` may free it.
+// before they are read. `data_dir` is not stored, and the callback pointers are
+// copied. Of `desc.platform` only `user` and `log` are copied, but the header's
+// contract still holds: both must stay valid until `nva_app_destroy`, because
+// `user` is handed back to `log` on every later line. On success `*out` owns the
+// boxed `App`, and only `nva_app_destroy` may free it.
 #[no_mangle]
 pub unsafe extern "C" fn nva_app_create(
     desc: *const nva_app_desc,
@@ -389,8 +403,7 @@ pub unsafe extern "C" fn nva_app_start(app: *mut App) -> nva_status {
         }
         Err(status) => Outcome::refused(status, "start", "the state lock is poisoned"),
     };
-    app.platform.say(outcome.level, &outcome.text);
-    outcome.status
+    app.announce(&outcome)
 }
 
 /// Move to `Paused` (`nva_app_pause`, Android's `onPause`).
@@ -425,8 +438,7 @@ pub unsafe extern "C" fn nva_app_pause(app: *mut App) -> nva_status {
         }
         Err(status) => Outcome::refused(status, "pause", "the state lock is poisoned"),
     };
-    app.platform.say(outcome.level, &outcome.text);
-    outcome.status
+    app.announce(&outcome)
 }
 
 /// Move back to `Running` (`nva_app_resume`, Android's `onResume`).
@@ -458,8 +470,7 @@ pub unsafe extern "C" fn nva_app_resume(app: *mut App) -> nva_status {
         }
         Err(status) => Outcome::refused(status, "resume", "the state lock is poisoned"),
     };
-    app.platform.say(outcome.level, &outcome.text);
-    outcome.status
+    app.announce(&outcome)
 }
 
 /// Move to `Stopped` (`nva_app_stop`, Android's `onStop`).
@@ -494,8 +505,7 @@ pub unsafe extern "C" fn nva_app_stop(app: *mut App) -> nva_status {
         }
         Err(status) => Outcome::refused(status, "stop", "the state lock is poisoned"),
     };
-    app.platform.say(outcome.level, &outcome.text);
-    outcome.status
+    app.announce(&outcome)
 }
 
 /// Record the window the shell just got (`nva_app_attach_window`).
@@ -556,8 +566,7 @@ pub unsafe extern "C" fn nva_app_attach_window(
             Err(status) => Outcome::refused(status, "attach", "the state lock is poisoned"),
         }
     };
-    app.platform.say(outcome.level, &outcome.text);
-    if outcome.status != NVA_OK {
+    if app.announce(&outcome) != NVA_OK {
         return outcome.status;
     }
     let callbacks = app.callbacks;
@@ -612,8 +621,7 @@ pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -
         }
         Err(status) => Outcome::refused(status, "detach", "the state lock is poisoned"),
     };
-    app.platform.say(outcome.level, &outcome.text);
-    if outcome.status != NVA_OK {
+    if app.announce(&outcome) != NVA_OK {
         return outcome.status;
     }
     let callbacks = app.callbacks;
@@ -1293,6 +1301,45 @@ mod tests {
                 "every line carries the runtime's tag"
             );
         }
+    }
+
+    #[test]
+    fn a_background_cycle_records_every_word_once() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: `app` is live; `1` is a valid generation and the window
+        // pointer is opaque to the runtime and never dereferenced.
+        unsafe {
+            assert_eq!(nva_app_start(app), NVA_OK);
+            assert_eq!(nva_app_resume(app), NVA_OK);
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 1080, 1920, 1),
+                NVA_OK
+            );
+            assert_eq!(nva_app_pause(app), NVA_OK);
+            assert_eq!(nva_app_resume(app), NVA_OK);
+            assert_eq!(nva_app_stop(app), NVA_OK);
+            assert_eq!(nva_app_detach_window(app, 1), NVA_OK);
+        }
+        destroy(app);
+
+        let said: Vec<String> = logs.take().into_iter().map(|line| line.text).collect();
+        assert_eq!(
+            said,
+            [
+                "start",
+                "resume",
+                "attach generation=1 1080x1920",
+                "pause",
+                "resume",
+                "stop",
+                "detach generation=1",
+                "destroy"
+            ],
+            "each of the seven transitions says its own word exactly once, in order"
+        );
     }
 
     #[test]

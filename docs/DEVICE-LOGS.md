@@ -1,6 +1,6 @@
 # 设备日志（#99、#101）
 
-> 来源：票 #99（Parent #89）；§8 来自 #101（运行时事件）。状态：v2（2026-11-15，吸收 review 修正）。
+> 来源：票 #99（Parent #89）；§8 来自 #101（运行时事件）。状态：v3（2026-11-21，新增 §8；v1/v2 是 #99 的两版）。
 > 依据：#91（壳事件与词表）、docs/ARCHITECTURE.md §3.7（壳生命周期）、#101（`nva_platform.log`）。
 > 代码：`shell/android/jni/nva_shell_jni.c`（写）、`shell/android/java/com/bingnnvjn/nva/LogProvider.java`（读）。
 
@@ -151,6 +151,9 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
 - **一次迁移一行。** 冷启动是 `start`、`resume`、`attach generation=N WxH` 三条，各恰好一次。
   拒绝是一条 `error`，形如 `start refused: no transition from started`——带上被拒的操作和它当时
   所处的状态；`detach` 的代差不匹配会把两个代差都写出来。
+- **运行时的词是 ABI 调用名，不是 §3 的壳事件词。** `[rt] ... destroy` 与壳的
+  `destroyed status=0` 成对出现，是因为运行时说的是它自己被调用的那个函数，而壳说的是它对
+  用户可见的事件（过去时）。两套词各自成立，不需要对齐。
 - **两种行不记**：`nva_app_create` 自己的拒绝（那一刻还没有对象，没有可说话的出口，而壳那边
   已经有 `app create failed: status=N`），以及 `nva_app_get_stats` 的拒绝（查询不是事件，
   逐帧记录会把事件埋掉）。两处都是判断，写在 `crates/nva-runtime/src/app.rs` 的模块注释里。

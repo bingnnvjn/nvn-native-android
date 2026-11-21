@@ -350,6 +350,10 @@ static const char *shell_level_name(uint32_t level)
  * apart when the file is read back. `msg` is one line by contract — the runtime
  * builds it from literals and numbers — and is passed as data, never as a
  * format.
+ *
+ * Called synchronously on whichever thread called `nva_app_*` (see the
+ * "Thread" section above): every export is reached from the main thread today,
+ * which is what keeps `shell_emit`'s single-writer assumption true.
  */
 static void shell_platform_log(void *user, uint32_t level, const char *tag, const char *msg)
 {
@@ -495,10 +499,11 @@ Java_com_bingnnvjn_nva_MainActivity_appCreate(JNIEnv *env, jobject thiz, jstring
      * it every refused transition stayed inside Rust and the file showed
      * nothing. `g_platform` is static, so the borrow survives to `destroy`.
      *
-     * `desc` and `dir` live for this call only. The runtime copies the callback
-     * pointers and the platform's `user` / `log` fields, and stores neither
-     * `data_dir` nor the descriptor, so releasing `dir` right after is correct;
-     * the day it does store `data_dir`, the release moves too.
+     * `desc` and `dir` live for this call only: the runtime copies the callback
+     * pointers and the platform's `user` / `log` fields and stores neither
+     * `data_dir` nor the descriptor, so releasing `dir` right after is correct.
+     * It does keep calling `log` with that `user` until `nva_app_destroy`, which
+     * is the other reason `g_platform` is static rather than a local here.
      */
     nva_app_desc desc = {
         .size = (uint32_t)sizeof(desc),

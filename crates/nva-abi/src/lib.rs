@@ -350,13 +350,17 @@ pub struct nva_audio_config {
 pub const NVA_AUDIO_CONFIG_VERSION: u32 = 1;
 pub const NVA_AUDIO_FORMAT_I16: u32 = 1;
 
-/// The `level` argument of `nva_platform.log`.
+/// The `level` argument of `nva_platform.log` when the line reports a refusal.
 ///
-/// The numbers mean something only inside this ABI: they are not Android's
-/// `Log.*` priorities, so a shell maps them instead of forwarding them.
+/// The four `NVA_LOG_*` numbers are meaningful only inside this ABI: they are
+/// not Android's `Log.*` priorities, so a shell maps them instead of forwarding
+/// them.
 pub const NVA_LOG_ERROR: u32 = 0;
+/// The level between a refusal and a plain event. Nothing raises it yet.
 pub const NVA_LOG_WARN: u32 = 1;
+/// A transition that happened.
 pub const NVA_LOG_INFO: u32 = 2;
+/// Detail a device run does not need by default.
 pub const NVA_LOG_DEBUG: u32 = 3;
 
 /// 80 B; implemented by the shell, borrowed by runtime until app destroy.

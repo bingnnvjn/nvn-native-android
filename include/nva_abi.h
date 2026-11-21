@@ -292,7 +292,11 @@ struct nva_platform {                    /* 80 B；壳实现，runtime 借用至
     nva_status (*audio_set_volume)(void *user, uint64_t stream, float volume);
     nva_status (*rumble)(void *user, uint32_t low, uint32_t high, uint32_t duration_ms);
     uint64_t   (*clock_now_ns)(void *user, uint32_t clock_id);
-    /* level 取上面的 NVA_LOG_*；tag 是 C 字符串常量 */
+    /*
+     * 同步调用：在调 nva_app_* 的那个线程上直接执行，不排队。
+     * level 取上面的 NVA_LOG_*；tag 是常量字符串；msg 只在本次调用内有效，
+     * 壳要留就自己复制。user 必须对直到 nva_app_destroy 的每次调用都有效。
+     */
     void       (*log)(void *user, uint32_t level, const char *tag, const char *msg);
 };
 #define NVA_PLATFORM_VERSION 1u
