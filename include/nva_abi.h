@@ -92,6 +92,7 @@ typedef struct nva_fence {               /* 16 B */
 typedef struct nva_host_services {       /* 48 B */
     uint32_t size, version;              /* NVA_HOST_SERVICES_VERSION = 2 */
     void *user;
+    /* level 与 nva_platform.log 同一套 NVA_LOG_*（定义见下面「平台壳」段） */
     void (*log)(void *user, uint32_t level, const char *tag, const char *msg);
     nva_status (*mem_query)(void *user, uint64_t va, uint64_t size,
                             nva_mem_region *out, uint64_t *out_off,

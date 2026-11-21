@@ -1325,7 +1325,8 @@ mod tests {
         }
         destroy(app);
 
-        let said: Vec<String> = logs.take().into_iter().map(|line| line.text).collect();
+        let lines = logs.take();
+        let said: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
         assert_eq!(
             said,
             [
@@ -1340,6 +1341,13 @@ mod tests {
             ],
             "each of the seven transitions says its own word exactly once, in order"
         );
+        for line in &lines {
+            assert_eq!(
+                line.level, NVA_LOG_INFO,
+                "every transition is info, got {}: {}",
+                line.level, line.text
+            );
+        }
     }
 
     #[test]

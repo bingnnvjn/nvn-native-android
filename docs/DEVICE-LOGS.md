@@ -68,8 +68,10 @@ javac 的 bootclasspath 上只有 `android.jar`，没有 androidx；也没有 `r
 | `share failed: …` | Java | 分享面板没起来（没装可接收的 App，或 Activity 已经没了） |
 | `native call failed: <异常>` | Java | `shellInfo` 抛了异常（典型是库没加载成功），设备行里会带着它 |
 
-**拒绝只记一行，在 C 侧**（`<事件> failed: status=N`）。Java 不再抄一遍：同一次失败
-出现两条、措辞还不一样，读的人只会当成两个事件。
+**拒绝在 C 侧记，Java 不再抄一遍。** #99 时这是「一次拒绝一行」（`<事件> failed: status=N`）；
+#101 之后被拒的调用还会带上运行时那一行（`[rt] error … refused: …`，见 §8），所以现在是
+**两行一对**：先说运行时为什么拒，再说壳这次调用的返回码。Java 仍然一句都不记——它再记一遍会
+变成三行、三套措辞，读的人才真的会把它们当成三个事件。
 
 ## 4. 与 logcat 的关系
 
@@ -93,10 +95,10 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
   （文件正好写到 256 KB 边上又来了一次 create），这时新文件的第一行就是那个头。
 - 轮转后 run 号从 1 重新开始：`.1` 和 `.log` 之间会重号。对齐两个文件靠 ISO 时间戳。
 - **分享永远只给 `nva-shell.log`**，所以轮转过的那个 run 会缺开头（`app created`、
-  `generation=1` 留在 `.1` 里）。按一次完整 run（冷启动 + HOME 回前台 + 旋转，约 13 行、
-  0.6 KB 量级）估算，约 400 次 run 才轮转一次，取证场景碰不到；真要看更早的，只能
+  `generation=1` 留在 `.1` 里）。按一次完整 run（冷启动 + HOME 回前台 + 旋转，约 20 行、
+  0.9 KB 量级）估算，约 280 次 run 才轮转一次，取证场景碰不到；真要看更早的，只能
   `adb pull <data_dir>/nva-shell.log.1`。这两个数字是估算，随生命周期回调次数与
-  设备行的长度浮动。
+  设备行的长度浮动；#101 之后每个迁移多一行 `[rt]`，所以从 #99 的 13 行 / 400 次涨到这里。
 
 ## 6. 谁写、谁不写
 
@@ -135,8 +137,12 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
 ```
 
 - **`[rt]` 是唯一的区别。** 运行时行与壳行走同一个 `shell_log`：同一个 `HH:MM:SS.mmm` 前缀、
-  同一个文件、每行都 `fflush`。所以文件里的先后就是真实的先后——壳在自己那条里记的是
-  `nva_app_*` 的返回码，而运行时那条在调用内部就写下了，总在前。
+  同一个文件、每行都 `fflush`。**判断先后看文件偏移**：壳记返回码的那条总在 `[rt]` 之后
+  （`nva_app_*` 返回了它才有那条），但诊断行可以在前面——带窗口进 `destroy` 时，
+  `destroy with a window still attached` 就排在 `[rt] … destroy` 之前。
+- **时间戳是本机墙钟**（§3）。两侧共用同一个取时函数、同一条线程顺序写，所以正常情况不倒退；
+  墙钟被 NTP 或夏令时调整时可能倒退，代码没有为此做补偿。要断言「时间戳单调」，前提是这次 run
+  里系统时钟没跳。
 - **等级**取 `include/nva_abi.h` 的四个宏，壳映射成词：
 
   | ABI 宏 | 数值 | 文件里的词 | 什么时候出现 |
@@ -148,6 +154,9 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
 
   这四个数值只在本 ABI 内有意义，**不是** Android `Log.*` 的优先级（那是另一套 2..7）；
   映射在壳里做，运行时不知道 Android 存在。
+- **等级只体现在行里的词上，不改 logcat 优先级。** `shell_emit` 两个出口都用
+  `ANDROID_LOG_INFO`（§4 要求两边逐字节相同），所以 `adb logcat *:E` 抓不到 `[rt] error`；
+  要按等级筛选，看文件，别用 logcat 的优先级开关。
 - **一次迁移一行。** 冷启动是 `start`、`resume`、`attach generation=N WxH` 三条，各恰好一次。
   拒绝是一条 `error`，形如 `start refused: no transition from started`——带上被拒的操作和它当时
   所处的状态；`detach` 的代差不匹配会把两个代差都写出来。
