@@ -60,13 +60,32 @@ fi
 APK_NAME=${APK_NAME:-nva-shell.apk}
 OUT=${OUT:-dist/android-apk}
 OUT=$(realpath -m "$OUT")
+
+# The version the phone shows (#103). `VERSION` holds `<major>.<minor>` and is
+# bumped by hand when a package goes out; the date comes from HEAD's commit, not
+# from the clock, so rebuilding one commit yields one versionName. The same
+# string goes into the JNI below, so the log's device line and Android's "App
+# info" never disagree.
+VERSION_MINOR=$(tr -d '[:space:]' <android/VERSION)
+if [ -z "$VERSION_MINOR" ]; then
+    echo "error: android/VERSION is empty" >&2
+    exit 1
+fi
+BUILD_DATE=$(git -C "$REPO" log -1 --format=%cd --date=format:%Y-%m-%d 2>/dev/null || true)
+if [ -z "$BUILD_DATE" ]; then
+    echo "error: cannot read HEAD's commit date (not a git checkout?)" >&2
+    exit 1
+fi
+VERSION_NAME="$VERSION_MINOR ($BUILD_DATE)"
+VERSION_CODE=$(printf '%s' "$BUILD_DATE" | tr -d '-')
+
 BUILD="$OUT/build"
 APKROOT="$BUILD/apkroot"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/lib/arm64-v8a" "$BUILD/classes" "$BUILD/dex" "$APKROOT/lib/arm64-v8a"
 
-echo "==> native library"
+echo "==> native library (version $VERSION_NAME, code $VERSION_CODE)"
 # -ffixed-x18 is the project-wide arm64 rule (docs/GATES.md §3). #91 makes the
 # JNI layer a C ABI caller, so it includes the product header and links the
 # runtime; `-landroid` is where ANativeWindow_fromSurface lives. The runtime
@@ -74,8 +93,11 @@ echo "==> native library"
 # this script does not compile Rust. -Werror is what turns the `format(printf)`
 # attribute on shell_log into an actual gate: without -Wall it never fires, and
 # a bad format string would otherwise only show up on a phone.
+# -DSHELL_VERSION is the phone-visible version (#103): the same string goes to
+# `aapt2` below, so the log's device line and "App info" cannot drift apart.
 "$CC" -std=c11 -shared -fPIC -O2 -fno-stack-protector -ffixed-x18 \
     -Wall -Wextra -Werror \
+    -DSHELL_VERSION="\"$VERSION_NAME\"" \
     -Wl,-soname,libnva_shell_jni.so \
     -I "$REPO/include" \
     android/jni/nva_shell_jni.c \
@@ -111,7 +133,7 @@ echo "==> resources / manifest"
     -I "$PLATFORM/android.jar" \
     --manifest android/AndroidManifest.xml \
     --min-sdk-version 26 --target-sdk-version 34 \
-    --version-code 1 --version-name 0.1.0-m0a
+    --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
 
 cp "$BUILD/base.apk" "$BUILD/unsigned.apk"
 cp "$BUILD/dex/classes.dex" "$APKROOT/classes.dex"
