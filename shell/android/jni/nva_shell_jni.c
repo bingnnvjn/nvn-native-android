@@ -18,14 +18,19 @@
  *
  * ## Who holds the window reference
  *
- * `ANativeWindow_fromSurface` returns a reference the *caller* owns. This file
- * is that caller, and the only one: it takes the reference in
- * `windowAttached` and releases it in `windowDetached` **after**
- * `nva_app_detach_window` has returned successfully, which is the order §7.3
- * requires ("detach 返回后壳才 release"). A refused detach leaves the record
- * and the reference together — see the comment on that branch. The runtime
- * borrows the bare pointer in between and releases nothing, so there is exactly
- * one owner and no shape where both sides believe the other one owns it.
+ * `ANativeWindow_fromSurface` returns a reference the *caller* owns, and this
+ * file is one of two owners. It takes its reference in `windowAttached` and
+ * releases it in `windowDetached` **after** `nva_app_detach_window` has returned
+ * successfully, which is the order §7.3 requires ("detach 返回后壳才 release").
+ * A refused detach leaves the record and this file's reference together — see
+ * the comment on that branch.
+ *
+ * The other owner is the engine (#93), and the two counts are independent: the
+ * runtime acquires its own reference when it starts the render thread and
+ * releases it when that thread exits, which `nva_app_detach_window` waits for
+ * through the join. So detach returning means the engine holds no pointer and
+ * this file may drop its own, while the window itself stays alive until it
+ * does. Neither side believes the other one owns the reference.
  *
  * ## Thread
  *

@@ -142,7 +142,7 @@ typedef struct nva_stats {               /* 96 B；v2 尾部追加 36 B，补 4 
     uint64_t frames, draw_calls, submits;
     /* v2 设备门计数（GATES §2.4）。尚未产生计数的实现填 0。 */
     uint32_t presents;                   /* 上屏次数；跳帧时与 frames 不等 */
-    uint32_t surface_generation;         /* attach/detach 代数 */
+    uint32_t surface_generation;         /* 最后一次 attach 的代数；detach 不清零 */
     uint32_t missing_variants;           /* shader cache 未命中的变体数 */
     uint32_t draw_skipped;               /* 因缺变体被跳过的 draw */
     uint32_t xruns;                      /* 音频欠载次数 */

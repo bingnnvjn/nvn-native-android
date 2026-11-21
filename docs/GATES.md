@@ -207,7 +207,7 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 
 - 输入三段：确认键（`M2-0`）→ overlay 摇杆/ABXY（`M2b`）→ 手柄（M3 之后）。
 - pack 上机：M1–M3 用 `nva-pack install`（adb，dev-only）；SAF 在 `M3b`。
-- `nva_stats` 追加：§2.4 已在 #90 落地（96 B / `NVA_STATS_VERSION = 2`，账本 86/11/11）；九个计数目前恒 0，由 #93/#96 填写。
+- `nva_stats` 追加：§2.4 已在 #90 落地（96 B / `NVA_STATS_VERSION = 2`，账本 86/11/11）；`presents` / `submits` / `surface_generation` 由 #93 填写；其余六个计数恒 0，由 #96 填写。
 - **#31**：不前置任何门；每门记 `validation_available` 与 `validation_errors`；到 M2 末未关则按 #31 路径 3 收口，附失败命令、loader 版本、logcat 哈希。
 - 证据：`PIPELINE.md:49` 的公开 evidence artifact 对产品门退役，只在 spike 保留；#33 定私有根路径。
 

@@ -147,8 +147,8 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
 
   | ABI 宏 | 数值 | 文件里的词 | 什么时候出现 |
   |---|---|---|---|
-  | `NVA_LOG_ERROR` | 0 | `error` | 拒绝：迁移不合法、attach 被拒、代差不匹配、状态锁中毒 |
-  | `NVA_LOG_WARN` | 1 | `warn` | 本票不产生 |
+  | `NVA_LOG_ERROR` | 0 | `error` | 拒绝：迁移不合法、attach 被拒、代差不匹配、状态锁中毒；引擎拒绝：渲染线程起不来、首帧 setup 失败 |
+  | `NVA_LOG_WARN` | 1 | `warn` | 引擎备注：`suboptimal`、swapchain out-of-date、首帧 1 秒未就绪、渲染循环停止的原因 |
   | `NVA_LOG_INFO` | 2 | `info` | 迁移成功：`start` / `resume` / `pause` / `stop` / `attach` / `detach` / `destroy` |
   | `NVA_LOG_DEBUG` | 3 | `debug` | 本票不产生 |
 
@@ -159,7 +159,8 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
   要按等级筛选，看文件，别用 logcat 的优先级开关。
 - **一次迁移一行。** 冷启动是 `start`、`resume`、`attach generation=N WxH` 三条，各恰好一次。
   拒绝是一条 `error`，形如 `start refused: no transition from started`——带上被拒的操作和它当时
-  所处的状态；`detach` 的代差不匹配会把两个代差都写出来。
+  所处的状态；`detach` 的代差不匹配会把两个代差都写出来。attach 与 detach 成功后壳再各追加一行
+  `<attach|detach> stats …`（见本节末尾），那两行是壳读快照，不是运行时的事件。
 - **运行时的词是 ABI 调用名，不是 §3 的壳事件词。** `[rt] ... destroy` 与壳的
   `destroyed status=0` 成对出现，是因为运行时说的是它自己被调用的那个函数，而壳说的是它对
   用户可见的事件（过去时）。两套词各自成立，不需要对齐。
