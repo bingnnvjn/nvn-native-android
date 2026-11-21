@@ -92,6 +92,7 @@ typedef struct nva_fence {               /* 16 B */
 typedef struct nva_host_services {       /* 48 B */
     uint32_t size, version;              /* NVA_HOST_SERVICES_VERSION = 2 */
     void *user;
+    /* level 与 nva_platform.log 同一套 NVA_LOG_*（定义见下面「平台壳」段） */
     void (*log)(void *user, uint32_t level, const char *tag, const char *msg);
     nva_status (*mem_query)(void *user, uint64_t va, uint64_t size,
                             nva_mem_region *out, uint64_t *out_off,
@@ -273,6 +274,15 @@ typedef struct nva_audio_config {        /* 24 B */
 #define NVA_AUDIO_CONFIG_VERSION 1u
 #define NVA_AUDIO_FORMAT_I16 1u
 
+/*
+ * `nva_platform.log` 的等级。数值只在本 ABI 内有意义：它们不是 Android
+ * `Log.*` 的优先级（那是另一套 2..7），壳要自己映射，不能原样转发。
+ */
+#define NVA_LOG_ERROR 0u
+#define NVA_LOG_WARN  1u
+#define NVA_LOG_INFO  2u
+#define NVA_LOG_DEBUG 3u
+
 struct nva_platform {                    /* 80 B；壳实现，runtime 借用至 app destroy */
     uint32_t size, version;
     void *user;
@@ -283,6 +293,11 @@ struct nva_platform {                    /* 80 B；壳实现，runtime 借用至
     nva_status (*audio_set_volume)(void *user, uint64_t stream, float volume);
     nva_status (*rumble)(void *user, uint32_t low, uint32_t high, uint32_t duration_ms);
     uint64_t   (*clock_now_ns)(void *user, uint32_t clock_id);
+    /*
+     * 同步调用：在调 nva_app_* 的那个线程上直接执行，不排队。
+     * level 取上面的 NVA_LOG_*；tag 是常量字符串；msg 只在本次调用内有效，
+     * 壳要留就自己复制。user 必须对直到 nva_app_destroy 的每次调用都有效。
+     */
     void       (*log)(void *user, uint32_t level, const char *tag, const char *msg);
 };
 #define NVA_PLATFORM_VERSION 1u

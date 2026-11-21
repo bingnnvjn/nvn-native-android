@@ -53,6 +53,10 @@
  * before that — `JNI_OnLoad`, `shellInfo` — reaches logcat only. The run header
  * is written when the file opens, so on a create that succeeds, `app created`
  * is the line after it.
+ *
+ * The runtime's own lines (#101) come back through `nva_platform.log`, which
+ * lands in `shell_platform_log` and then in the same `shell_log`: one file, one
+ * formatter, one timestamp. `[rt]` is the whole difference a reader has to know.
  */
 #include <jni.h>
 
@@ -322,6 +326,56 @@ static void shell_log_text(const char *text)
 }
 
 /*
+ * The names the runtime's `nva_platform.log` levels get. The ABI numbers
+ * (`NVA_LOG_*` in `include/nva_abi.h`) are ours, not Android's `Log.*`
+ * priorities, so this function is where one becomes the other. A level outside
+ * the four is named rather than mapped: a silently wrong priority is worse than
+ * an odd-looking word.
+ */
+static const char *shell_level_name(uint32_t level)
+{
+    switch (level) {
+    case NVA_LOG_ERROR: return "error";
+    case NVA_LOG_WARN:  return "warn";
+    case NVA_LOG_INFO:  return "info";
+    case NVA_LOG_DEBUG: return "debug";
+    default:            return "unknown";
+    }
+}
+
+/*
+ * `nva_platform.log` (#101): the runtime's own lines. They go through
+ * `shell_log`, so they carry the same timestamp prefix and reach the same file
+ * and the same logcat exit as this file's events; `[rt]` is what tells the two
+ * apart when the file is read back. `msg` is one line by contract — the runtime
+ * builds it from literals and numbers — and is passed as data, never as a
+ * format.
+ *
+ * Called synchronously on whichever thread called `nva_app_*` (see the
+ * "Thread" section above): every export is reached from the main thread today,
+ * which is what keeps `shell_emit`'s single-writer assumption true.
+ */
+static void shell_platform_log(void *user, uint32_t level, const char *tag, const char *msg)
+{
+    (void)user;
+    shell_log("[rt] %s %s: %s", shell_level_name(level), tag != NULL ? tag : "?",
+              msg != NULL ? msg : "(null)");
+}
+
+/*
+ * What the runtime borrows until `nva_app_destroy`, so it must be static
+ * storage: a local in `appCreate` would dangle the moment that call returned.
+ * The audio, rumble and clock slots stay zero — this ticket adds the log seam
+ * only, and a placeholder that answered successfully would be a lie the runtime
+ * has no way to detect.
+ */
+static const nva_platform g_platform = {
+    .size = (uint32_t)sizeof(nva_platform),
+    .version = NVA_PLATFORM_VERSION,
+    .log = shell_platform_log,
+};
+
+/*
  * Open the file and write the run header. Called with the directory the Java
  * side passed to `appCreate`, before the runtime is created, so the header and
  * `app created` land in the same file.
@@ -441,9 +495,15 @@ Java_com_bingnnvjn_nva_MainActivity_appCreate(JNIEnv *env, jobject thiz, jstring
      * the runtime already calls it when it is set
      * (crates/nva-runtime/src/app.rs).
      *
-     * `desc` and `dir` live for this call only. The runtime copies the callback
-     * pointers and stores none of the other fields, so releasing `dir` right
-     * after is correct; the day it does store `data_dir`, the release moves too.
+     * `platform` is what lets the runtime say anything at all (#101): without
+     * it every refused transition stayed inside Rust and the file showed
+     * nothing. `g_platform` is static, so the borrow survives to `destroy`.
+     *
+     * `desc` and `dir` live for this call only: the runtime copies the callback
+     * pointers and the platform's `user` / `log` fields and stores neither
+     * `data_dir` nor the descriptor, so releasing `dir` right after is correct.
+     * It does keep calling `log` with that `user` until `nva_app_destroy`, which
+     * is the other reason `g_platform` is static rather than a local here.
      */
     nva_app_desc desc = {
         .size = (uint32_t)sizeof(desc),
@@ -452,7 +512,7 @@ Java_com_bingnnvjn_nva_MainActivity_appCreate(JNIEnv *env, jobject thiz, jstring
         .reserved = 0,
         .data_dir = dir,
         .callbacks = NULL,
-        .platform = NULL,
+        .platform = &g_platform,
     };
     nva_app *app = NULL;
     nva_status status = nva_app_create(&desc, &app);
