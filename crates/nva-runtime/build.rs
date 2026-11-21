@@ -8,6 +8,11 @@
 //! A local build without `glslang-tools` can set `NVA_SKIP_SHADERS=1` to emit
 //! empty files: enough to compile and run the non-Vulkan tests, and CI never
 //! sets it.
+//!
+//! On Android the runtime also links `libandroid.so`: the window path takes its
+//! own `ANativeWindow` reference (`src/window.rs`, #93), and that reference's
+//! acquire/release live there. The host build never touches those symbols, so
+//! the link is added only for the platform target.
 
 use std::env;
 use std::path::PathBuf;
@@ -17,6 +22,10 @@ fn main() {
     println!("cargo:rerun-if-changed=shaders/tri.vert");
     println!("cargo:rerun-if-changed=shaders/tri.frag");
     println!("cargo:rerun-if-env-changed=NVA_SKIP_SHADERS");
+
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rustc-link-lib=android");
+    }
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     if env::var_os("NVA_SKIP_SHADERS").is_some() {

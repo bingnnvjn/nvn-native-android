@@ -11,6 +11,11 @@
  * ANativeWindow reference is acquired and released here. Still no Vulkan, no
  * guest, no audio in this library.
  *
+ * #93 adds the read side of the stats snapshot: a successful attach and a
+ * successful detach each end with one `attach stats …` / `detach stats …` line
+ * (`shell_log_stats`). The counters are produced by the runtime's render
+ * thread, which lives in `libnva_runtime.so` — this file only asks for them.
+ *
  * ## Who holds the window reference
  *
  * `ANativeWindow_fromSurface` returns a reference the *caller* owns. This file
@@ -26,8 +31,11 @@
  *
  * Every function here runs on the Android main thread: activity callbacks and
  * SurfaceHolder callbacks are both delivered there, so the statics below need
- * no lock. The runtime locks its own state regardless, because the render
- * thread #93 adds will read it while these callbacks are still arriving.
+ * no lock. The runtime keeps its own state behind a mutex, and #93's render
+ * thread never touches it — it is handed an owned job plus two counters, and
+ * reports back through a condition variable the attach thread waits on. That is
+ * also why the render thread never calls `nva_platform.log`: the log file has
+ * one writer, and it is this thread.
  *
  * ## The device log (#99)
  *
@@ -385,6 +393,42 @@ static const nva_platform g_platform = {
 };
 
 /*
+ * One stats snapshot as one line (#93).
+ *
+ * `when` is `attach` or `detach`: the same fields are read at the two moments
+ * the ticket names, and the word is what tells the two lines apart when the
+ * file is read back. `presents` is the field the acceptance check looks at — at
+ * attach it must be at least 1, and after a detach it must be the value the run
+ * reached, not a larger one.
+ *
+ * The struct is zeroed and then given its own `size` / `version`: the runtime
+ * writes every field today, but a caller that handed it a half-initialised
+ * struct would be reading its own memory back as a count on any field a later
+ * version appends.
+ *
+ * Called on the main thread only, like everything else here: `attach` has
+ * already waited for the first frame, so this line is a snapshot, not a poll.
+ */
+static void shell_log_stats(const char *when)
+{
+    if (g_app == NULL) {
+        return;
+    }
+    nva_stats stats;
+    memset(&stats, 0, sizeof stats);
+    stats.size = (uint32_t)sizeof(stats);
+    stats.version = NVA_STATS_VERSION;
+    nva_status status = nva_app_get_stats(g_app, &stats);
+    if (status != NVA_OK) {
+        shell_log("%s stats failed: status=%u", when, (unsigned)status);
+        return;
+    }
+    shell_log("%s stats presents=%u generation=%u submits=%llu", when,
+              (unsigned)stats.presents, (unsigned)stats.surface_generation,
+              (unsigned long long)stats.submits);
+}
+
+/*
  * Open the file and write the run header. Called with the directory the Java
  * side passed to `appCreate`, before the runtime is created, so the header and
  * `app created` land in the same file.
@@ -498,11 +542,11 @@ Java_com_bingnnvjn_nva_MainActivity_appCreate(JNIEnv *env, jobject thiz, jstring
      */
     shell_log_open(dir);
     /*
-     * No callbacks yet: the shell has nothing to start when a surface arrives,
-     * and the two logs around this call are the evidence this ticket asks for.
-     * #93 passes `on_surface_ready` here so the engine can build the swapchain;
-     * the runtime already calls it when it is set
-     * (crates/nva-runtime/src/app.rs).
+     * No callbacks: the shell has nothing to start when a surface arrives, and
+     * the two logs around this call are the evidence this ticket asks for. The
+     * engine is started by `nva_app_attach_window` itself (#93), not by
+     * `on_surface_ready`; the callback stays a shell-side hook the runtime
+     * raises when one is set.
      *
      * `platform` is what lets the runtime say anything at all (#101): without
      * it every refused transition stayed inside Rust and the file showed
@@ -644,6 +688,11 @@ Java_com_bingnnvjn_nva_MainActivity_windowAttached(JNIEnv *env, jobject thiz, jo
     g_generation = (uint32_t)generation;
     shell_log("surface attached (generation=%d) %dx%d status=%u", (int)generation, (int)width,
               (int)height, (unsigned)NVA_OK);
+    /* #93: the runtime started its render thread inside the attach and waited
+     * up to a second for the first frame, so this snapshot is normally
+     * `presents >= 1`. A 0 here is the evidence for a failed or late first
+     * frame, not a reason to fail the attach. */
+    shell_log_stats("attach");
     return (jint)NVA_OK;
 }
 
@@ -675,6 +724,10 @@ Java_com_bingnnvjn_nva_MainActivity_windowDetached(JNIEnv *env, jobject thiz)
         g_window = NULL;
     }
     shell_log("detached (generation=%u) status=%u", (unsigned)g_generation, (unsigned)NVA_OK);
+    /* #93: detach stopped and joined the render thread, so `presents` here is
+     * final for this run. On HOME the pair of these two lines is the evidence
+     * that the loop stopped instead of erroring out. */
+    shell_log_stats("detach");
     g_generation = 0;
     return (jint)NVA_OK;
 }

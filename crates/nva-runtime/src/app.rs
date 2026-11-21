@@ -7,9 +7,10 @@
 //!
 //! The module records what the shell reports — the lifecycle state, the window,
 //! its size, the generation — and calls back into the shell when a window
-//! arrives or leaves. It builds no Vulkan object: `nva_app_attach_window` stops
-//! at the recording on purpose. The surface/swapchain pair, and the engine that
-//! owns it, arrive with #93.
+//! arrives or leaves. On Android it also starts the render thread that builds
+//! the surface/swapchain pair and presents the clear frame (#93); that engine
+//! lives in `window.rs`, and this module is the only thing that starts and
+//! stops it.
 //!
 //! ## Speaking to the shell
 //!
@@ -21,7 +22,9 @@
 //! the mutex across it would deadlock the moment a shell called back into
 //! `nva_app_*` from there. It runs synchronously, on whichever thread called the
 //! export — never queued for later — so a shell that writes a file from it is
-//! writing on the caller's thread.
+//! writing on the caller's thread. The render thread never calls it: what the
+//! loop has to say is picked up by `attach` or `detach`, which run on that same
+//! shell thread.
 //!
 //! A shell that passes no platform logs nothing, which is not an error: the
 //! seam is optional (`desc.platform` may be NULL). Two silences are deliberate.
@@ -35,10 +38,10 @@
 //! The shell (`docs/ARCHITECTURE.md` §7.3): it acquires one reference before
 //! `nva_app_attach_window` and releases it only after
 //! `nva_app_detach_window` has returned. This module borrows the bare pointer
-//! in between, never acquires a reference, and never touches the window after
-//! detach returns. When #93's engine starts building a `VkSurfaceKHR` it takes
-//! a reference of its own at attach, as §7.3 says; the two references are
-//! independent counts on the same window.
+//! in between — it never dereferences it — and never touches the window after
+//! detach returns. The render thread takes a second, independent reference of
+//! its own at attach (§7.3) and releases it when the thread exits, which
+//! `detach` waits for through the join.
 //!
 //! That split is safe because of what comes between the two calls: the runtime
 //! borrows the window only while its record exists, and the record exists only
@@ -51,13 +54,25 @@ use core::mem::size_of;
 use core::ptr;
 
 use std::ffi::CString;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use nva_abi::{
     nva_app_callbacks, nva_app_desc, nva_platform, nva_stats, nva_status,
     NVA_APP_CALLBACKS_VERSION, NVA_APP_DESC_VERSION, NVA_ERR_INVALID_ARGUMENT, NVA_ERR_STALE,
-    NVA_LOG_ERROR, NVA_LOG_INFO, NVA_OK, NVA_PLATFORM_VERSION, NVA_STATS_VERSION,
+    NVA_LOG_ERROR, NVA_LOG_INFO, NVA_LOG_WARN, NVA_OK, NVA_PLATFORM_VERSION, NVA_STATS_VERSION,
 };
+
+/// The render thread's engine, only on the platform that has a window to
+/// present into.
+///
+/// The engine's file is `src/window.rs` but the declaration has to sit here:
+/// this is the module that owns the loop's lifetime, and a submodule declared
+/// in `app.rs` would otherwise be looked for in `src/app/`. `#[path]` bridges
+/// the two.
+#[cfg(target_os = "android")]
+#[path = "window.rs"]
+mod window;
 
 /// Where the shell has taken the app, following Android's activity callbacks.
 ///
@@ -181,17 +196,20 @@ impl Outcome {
 
 /// The window the shell attached, borrowed until it is detached.
 ///
-/// The fields are this ticket's output: the record that `attach` writes and
-/// `detach` clears. Nothing reads them yet — #93's engine is the reader, taking
-/// `native` to build the `VkSurfaceKHR` and the size to size the swapchain — so
-/// the three sit behind an `allow` until that reader lands. Removing them
-/// instead would remove the thing the ticket exists to produce.
+/// `attach` records it, `detach` matches its generation against the caller's,
+/// and the platform build hands the same four values to the render thread. The
+/// pointer itself is never dereferenced here: the engine takes its own
+/// `ANativeWindow` reference (`window.rs`), so this record is a token, not an
+/// owner.
+///
+/// Only the platform build reads `native`, `width` and `height`; the host build
+/// writes the record and never starts an engine, so those three are silenced
+/// there rather than around the whole module.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[derive(Clone, Copy)]
 struct AttachedWindow {
-    #[allow(dead_code)]
     native: *mut c_void,
-    #[allow(dead_code)]
     width: u32,
-    #[allow(dead_code)]
     height: u32,
     generation: u32,
 }
@@ -199,6 +217,45 @@ struct AttachedWindow {
 struct State {
     lifecycle: Lifecycle,
     window: Option<AttachedWindow>,
+    /// The render thread, while a window is attached. Only the platform build
+    /// has one: the host build records the window and starts nothing, which is
+    /// what the PC smoke tests rely on (`0x1000` is not a real window).
+    #[cfg(target_os = "android")]
+    render: Option<window::RenderLoop>,
+}
+
+/// What the render thread counts, shared with `nva_app_get_stats`.
+///
+/// Behind one `Arc` rather than two fields of `App` because the thread must not
+/// hold a pointer into a value the shell owns by raw pointer: one allocation,
+/// two owners, stable addresses. The counters publish no other data, so
+/// `Relaxed` is enough — a snapshot is a sample, not a synchronisation point.
+///
+/// The two recorders are called by the platform build's render thread only, so
+/// they are silenced on the host build instead of around the whole module.
+#[derive(Default)]
+pub(super) struct RenderCounters {
+    presents: AtomicU32,
+    submits: AtomicU64,
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+impl RenderCounters {
+    pub(super) fn record_present(&self) {
+        self.presents.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn record_submit(&self) {
+        self.submits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn presents(&self) -> u32 {
+        self.presents.load(Ordering::Relaxed)
+    }
+
+    fn submits(&self) -> u64 {
+        self.submits.load(Ordering::Relaxed)
+    }
 }
 
 /// The shell callbacks this module can raise, copied out of `nva_app_desc`.
@@ -237,17 +294,26 @@ impl SurfaceCallbacks {
 ///
 /// The shell creates one, drives it from its main thread, and destroys it in
 /// `onDestroy`. The state sits behind a mutex so that the single-writer
-/// assumption is written down in the type rather than in a comment: today every
-/// caller is the shell's main thread, which is why nothing here needs `App` to
-/// be `Send`. #93 adds a reader on the render thread, and that ticket has to
-/// decide how the two threads share the object — making this type `Sync`
-/// silently would answer that question in the wrong place.
+/// assumption is written down in the type rather than in a comment: every
+/// caller is the shell's main thread, which is why `App` is neither `Send` nor
+/// `Sync` and stays that way. #93's render thread is given an owned job plus
+/// these two shared counters (`window.rs`); it never holds an `&App`, so no
+/// `unsafe impl Sync` is needed or wanted.
 pub struct App {
     state: Mutex<State>,
     callbacks: SurfaceCallbacks,
     /// Where this object speaks. Behind no lock: it is copied at create and
     /// never changes, so reading it cannot race the state.
     platform: PlatformSink,
+    /// The render thread's counters (`window.rs`).
+    counters: Arc<RenderCounters>,
+    /// The generation the last successful attach carried.
+    ///
+    /// Deliberately sticky: `detach` does not clear it, so `surface_generation`
+    /// keeps naming the surface that last existed. #94 pairs it with its own
+    /// `attached` flag to tell "no window now" from "the last one was N"; a
+    /// value that fell back to 0 here would erase the second half of that.
+    last_generation: AtomicU32,
 }
 
 impl App {
@@ -259,6 +325,95 @@ impl App {
     fn announce(&self, outcome: &Outcome) -> nva_status {
         self.platform.say(outcome.level, &outcome.text);
         outcome.status
+    }
+}
+
+/// Starting and stopping the render thread.
+///
+/// Both run on the shell's thread, between the state transitions in `attach`,
+/// `detach` and `destroy`. The loop itself is joined here and nowhere else:
+/// detach must not return while a submit could still be in flight, and the
+/// shell releases its `ANativeWindow` reference as soon as it does.
+impl App {
+    /// Stops the render thread, if one is running, and hands back what it noted.
+    ///
+    /// Off the platform build there is no thread — `attach` only ever recorded
+    /// the window — so this is empty and the call sites stay identical.
+    #[cfg(not(target_os = "android"))]
+    fn stop_engine(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    #[cfg(target_os = "android")]
+    fn stop_engine(&self) -> Vec<String> {
+        let engine = match lock(self) {
+            Ok(mut state) => state.render.take(),
+            // The state lock is poisoned, which `panic = "abort"` makes
+            // unreachable in a product build (`lock`). Nothing is left that
+            // could be joined safely, so the call site finds no loop.
+            Err(_) => None,
+        };
+        engine
+            .map(window::RenderLoop::stop_and_join)
+            .unwrap_or_default()
+    }
+
+    /// Starts the render thread for a window `attach` just recorded.
+    ///
+    /// A replaced window's loop is stopped first: on a rotation the old loop
+    /// must be joined before the shell releases its reference to the old
+    /// window, and two loops presenting into two windows is never wanted.
+    #[cfg(target_os = "android")]
+    fn start_engine(&self, window: AttachedWindow) {
+        for note in self.stop_engine() {
+            self.platform.say(NVA_LOG_WARN, &format!("attach: {note}"));
+        }
+        let request = window::StartRequest {
+            native: window.native,
+            width: window.width,
+            height: window.height,
+            generation: window.generation,
+            counters: Arc::clone(&self.counters),
+        };
+        let render = match window::start(request) {
+            // A zero-sized surface: the window is recorded, and the next attach
+            // (surfaceChanged) carries the measurement.
+            Ok(None) => return,
+            Ok(Some(render)) => render,
+            Err(reason) => {
+                // No thread, no frames: the snapshot stays at `presents = 0`,
+                // which is what the acceptance check reads.
+                self.platform
+                    .say(NVA_LOG_ERROR, &format!("attach: {reason}"));
+                return;
+            }
+        };
+        let progress = render.progress();
+        match lock(self) {
+            Ok(mut state) => state.render = Some(render),
+            Err(_) => {
+                // Unreachable under `panic = "abort"` (`lock`). Join now rather
+                // than leave a thread presenting into a window nothing will
+                // ever detach.
+                let _ = render.stop_and_join();
+                self.platform
+                    .say(NVA_LOG_ERROR, "attach: the state lock is poisoned");
+                return;
+            }
+        }
+        match progress.wait(window::FIRST_FRAME_TIMEOUT) {
+            // Nothing to say: `presents` in the snapshot is the evidence.
+            window::FirstFrame::Presented => {}
+            window::FirstFrame::Pending => self
+                .platform
+                .say(NVA_LOG_ERROR, "attach: first frame not ready in 1s"),
+            window::FirstFrame::Failed(reason) => self
+                .platform
+                .say(NVA_LOG_ERROR, &format!("attach: {reason}")),
+        }
+        for note in progress.take_notes() {
+            self.platform.say(NVA_LOG_WARN, &format!("attach: {note}"));
+        }
     }
 }
 
@@ -342,9 +497,13 @@ pub unsafe extern "C" fn nva_app_create(
         state: Mutex::new(State {
             lifecycle: Lifecycle::Created,
             window: None,
+            #[cfg(target_os = "android")]
+            render: None,
         }),
         callbacks,
         platform,
+        counters: Arc::new(RenderCounters::default()),
+        last_generation: AtomicU32::new(0),
     });
     *out = Box::into_raw(app);
     NVA_OK
@@ -356,16 +515,22 @@ pub unsafe extern "C" fn nva_app_create(
 /// `app` must be a pointer returned by `nva_app_create`, or NULL, and must not
 /// be used again.
 // SAFETY: `app` is the pointer `nva_app_create` wrote and is freed exactly
-// once here; NULL is accepted and does nothing. The shell must have detached
-// its window first: this function frees the record, not the reference — the
-// `ANativeWindow` reference belongs to the shell (§7.3), and releasing it here
-// would release something this module never acquired.
+// once here; NULL is accepted and does nothing. The shell owns the
+// `ANativeWindow` reference it took (§7.3) and releases it itself; the render
+// thread's own reference is released by the job's drop, which the join below
+// waits for, so nothing outlives this call holding the window.
 #[no_mangle]
 pub unsafe extern "C" fn nva_app_destroy(app: *mut App) {
     if app.is_null() {
         return;
     }
     let app = Box::from_raw(app);
+    // A destroy with a window still attached is a shell that skipped
+    // `surfaceDestroyed`. The loop must still be joined here: it is the last
+    // moment anything can present into that window.
+    for note in app.stop_engine() {
+        app.platform.say(NVA_LOG_WARN, &format!("destroy: {note}"));
+    }
     app.platform.say(NVA_LOG_INFO, "destroy");
     drop(app);
 }
@@ -516,20 +681,23 @@ pub unsafe extern "C" fn nva_app_stop(app: *mut App) -> nva_status {
 /// Attaching while a window is already attached replaces the record. The shell
 /// emits that on a size change (rotation), where the new geometry supersedes the
 /// old one and the generation has advanced; it is not a detach, so
-/// `on_surface_lost` is not raised for the window being replaced.
+/// `on_surface_lost` is not raised for the window being replaced. The render
+/// thread of the replaced window is stopped and joined before the new one
+/// starts.
 ///
 /// The geometry is recorded exactly as reported, including a zero on either
 /// axis. Refusing that would move a decision into the ABI that belongs to the
 /// shell, which is the one place that knows whether a surface is momentarily
-/// unmeasured; #93 is where a zero-sized swapchain has to be caught.
+/// unmeasured. A zero-sized record starts no render thread (`window.rs`); the
+/// next attach, from `surfaceChanged`, carries the measurement.
 ///
 /// # Safety
 /// `app` must come from `nva_app_create`, and `native_window` must stay valid
 /// until the matching `nva_app_detach_window` returns.
 // SAFETY: `app` is null-checked and borrowed for the call. `native_window` is
-// never dereferenced here — the pointer is stored as an opaque value and handed
-// back to the shell untouched — so the only requirement it carries is the
-// ownership one in the doc comment: a live window that outlives the record.
+// stored as an opaque value and handed to the render thread, which takes its
+// own `ANativeWindow` reference before it uses it (§7.3) — so the shell's
+// reference, which outlives the record, is what keeps the pointer valid here.
 // The shell callback runs after the state guard is dropped, so a shell that
 // calls back into `nva_app_*` from it cannot deadlock on this mutex.
 #[no_mangle]
@@ -544,6 +712,10 @@ pub unsafe extern "C" fn nva_app_attach_window(
         return NVA_ERR_INVALID_ARGUMENT;
     }
     let app = &*app;
+    // Only the platform build starts an engine; the host build records and
+    // returns, which is what the PC tests' `0x1000` sentinel needs.
+    #[cfg(target_os = "android")]
+    let mut recorded: Option<AttachedWindow> = None;
     let outcome = if native_window.is_null() {
         Outcome::refused(NVA_ERR_INVALID_ARGUMENT, "attach", "the window is NULL")
     } else if generation == 0 {
@@ -555,12 +727,17 @@ pub unsafe extern "C" fn nva_app_attach_window(
     } else {
         match lock(app) {
             Ok(mut state) => {
-                state.window = Some(AttachedWindow {
+                let window = AttachedWindow {
                     native: native_window,
                     width,
                     height,
                     generation,
-                });
+                };
+                state.window = Some(window);
+                #[cfg(target_os = "android")]
+                {
+                    recorded = Some(window);
+                }
                 Outcome::done(format!("attach generation={generation} {width}x{height}"))
             }
             Err(status) => Outcome::refused(status, "attach", "the state lock is poisoned"),
@@ -569,12 +746,23 @@ pub unsafe extern "C" fn nva_app_attach_window(
     if app.announce(&outcome) != NVA_OK {
         return outcome.status;
     }
+    // Sticky: `detach` does not clear it. Recorded only for an attach that
+    // actually happened, so a refused call cannot move it.
+    app.last_generation.store(generation, Ordering::Relaxed);
+    #[cfg(target_os = "android")]
+    if let Some(window) = recorded {
+        app.start_engine(window);
+    }
     let callbacks = app.callbacks;
     if let Some(ready) = callbacks.ready {
         // SAFETY: `ready` is a shell function the shell itself wrote into
         // `nva_app_callbacks`; its contract is the C signature in
         // `include/nva_abi.h` (user, generation, width, height), which is what
         // is passed. `user` is the shell's own opaque pointer, unmodified.
+        //
+        // Raised last on purpose: a shell that reads the snapshot from inside
+        // this callback sees the first frame's `presents`, because `attach`
+        // waited for it above.
         unsafe { ready(callbacks.user, generation, width, height) };
     }
     NVA_OK
@@ -585,14 +773,21 @@ pub unsafe extern "C" fn nva_app_attach_window(
 /// Called with the generation the shell attached. A different generation means
 /// the two sides disagree about which window is live, which is the one state
 /// worth failing loudly: silently clearing would leave the shell holding a
-/// reference for a window this module no longer knows about.
+/// reference for a window this module no longer knows about. A refused detach
+/// leaves the render thread running with it — the record, the loop and the two
+/// references stay together.
+///
+/// A successful detach stops and joins the render thread before returning, so
+/// nothing can submit for this window afterwards; that is what makes the
+/// shell's release of its own reference safe (§7.3).
 ///
 /// # Safety
 /// `app` must come from `nva_app_create`.
 // SAFETY: `app` is null-checked and borrowed for the call. The window record is
 // dropped before the callback runs, and the stored `native_window` is not
-// touched again — not read, not released — so the shell is free to release its
-// reference as soon as this call returns (§7.3).
+// touched again — not read, not released by this module — so the shell is free
+// to release its reference as soon as this call returns (§7.3). The engine's
+// own reference is released by the render job as the joined thread exits.
 #[no_mangle]
 pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -> nva_status {
     if app.is_null() {
@@ -621,8 +816,18 @@ pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -
         }
         Err(status) => Outcome::refused(status, "detach", "the state lock is poisoned"),
     };
+    // Only a detach that happened takes the loop down; a refusal must leave it
+    // presenting into the window the record still names.
+    let notes = if outcome.status == NVA_OK {
+        app.stop_engine()
+    } else {
+        Vec::new()
+    };
     if app.announce(&outcome) != NVA_OK {
         return outcome.status;
+    }
+    for note in notes {
+        app.platform.say(NVA_LOG_WARN, &format!("detach: {note}"));
     }
     let callbacks = app.callbacks;
     if let Some(lost) = callbacks.lost {
@@ -636,10 +841,11 @@ pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -
 
 /// Write the stats snapshot (`nva_app_get_stats`).
 ///
-/// This ticket renders nothing and presents nothing, so every counter is 0.
-/// `surface_generation` is the exception: the shell's window generation is this
-/// module's own state rather than a counter #93 will produce later, so it
-/// reports the attached window's generation, or 0 when no window is attached.
+/// #93 gives three of the v2 fields a producer: `presents` and `submits` are the
+/// render thread's counters, and `surface_generation` is the last generation an
+/// attach carried — sticky, so a detach does not reset it. That is deliberate:
+/// #94 pairs it with an `attached` flag of its own, and a value that fell back
+/// to 0 here would erase which surface last existed.
 ///
 /// Every field of `nva_stats` except `size` and `version` is written. That is
 /// load-bearing: the v2 append (#90) added nine counters, and an implementation
@@ -650,10 +856,9 @@ pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -
 /// # Safety
 /// `app` must come from `nva_app_create` and `out` must point to a writable
 /// `nva_stats` whose `size` and `version` are already initialised.
-// SAFETY: `app` is null-checked and borrowed only to read the state; the guard
-// is dropped before any field of `out` is written. `out` is shell-owned and must
-// stay writable for the call. `size` / `version` are read before the first
-// write, so an older or shorter struct is refused with
+// SAFETY: `app` is null-checked and borrowed only to read atomics; `out` is
+// shell-owned and must stay writable for the call. `size` / `version` are read
+// before the first write, so an older or shorter struct is refused with
 // `NVA_ERR_INVALID_ARGUMENT` instead of overrun. Nothing is retained: the
 // snapshot is copied out and both borrows end with the call.
 #[no_mangle]
@@ -666,12 +871,6 @@ pub unsafe extern "C" fn nva_app_get_stats(app: *mut App, out: *mut nva_stats) -
         return NVA_ERR_INVALID_ARGUMENT;
     }
     let app = &*app;
-    let generation = {
-        let Ok(state) = lock(app) else {
-            return NVA_ERR_STALE;
-        };
-        state.window.as_ref().map_or(0, |window| window.generation)
-    };
     out.unsupported_calls = 0;
     out.unknown_resolves = 0;
     out.stub_aborts = 0;
@@ -680,13 +879,13 @@ pub unsafe extern "C" fn nva_app_get_stats(app: *mut App, out: *mut nva_stats) -
     out.flags = 0;
     out.frames = 0;
     out.draw_calls = 0;
-    out.submits = 0;
-    // v2 counters: #93 and #96 produce them. Zeroed for the same reason
-    // `nva_gfx_get_stats` zeroes them — a caller that did not initialise its
-    // struct must never read its own memory back as a count. The generation is
-    // the exception, because this module is the thing that counts it.
-    out.presents = 0;
-    out.surface_generation = generation;
+    out.submits = app.counters.submits();
+    // v2 counters: this ticket produces the first two, #96 the rest. The ones
+    // without a producer are zeroed for the same reason `nva_gfx_get_stats`
+    // zeroes them — a caller that did not initialise its struct must never read
+    // its own memory back as a count.
+    out.presents = app.counters.presents();
+    out.surface_generation = app.last_generation.load(Ordering::Relaxed);
     out.missing_variants = 0;
     out.draw_skipped = 0;
     out.xruns = 0;
@@ -840,6 +1039,32 @@ mod tests {
             data_dir: ptr::null(),
             callbacks,
             platform: ptr::null(),
+        }
+    }
+
+    /// A snapshot with the header filled in and every count at 0.
+    fn empty_stats() -> nva_stats {
+        nva_stats {
+            size: size_of::<nva_stats>() as u32,
+            version: NVA_STATS_VERSION,
+            unsupported_calls: 0,
+            unknown_resolves: 0,
+            stub_aborts: 0,
+            sticky_error: 0,
+            last_serial: 0,
+            flags: 0,
+            frames: 0,
+            draw_calls: 0,
+            submits: 0,
+            presents: 0,
+            surface_generation: 0,
+            missing_variants: 0,
+            draw_skipped: 0,
+            xruns: 0,
+            input_events: 0,
+            input_consumed: 0,
+            guest_svc_count: 0,
+            draw_caller_in_guest: 0,
         }
     }
 
@@ -1237,6 +1462,67 @@ mod tests {
             unsafe { nva_app_get_stats(app, ptr::null_mut()) },
             NVA_ERR_INVALID_ARGUMENT
         );
+        destroy(app);
+    }
+
+    #[test]
+    fn surface_generation_is_sticky_across_detach() {
+        let probe = Probe::default();
+        let callbacks = callbacks(&probe);
+        let app = create(&callbacks);
+        let mut snapshot = empty_stats();
+
+        // SAFETY: `app` is live, and the window pointer is a token the runtime
+        // stores without dereferencing on this target.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 640, 480, 3),
+                NVA_OK
+            );
+            assert_eq!(nva_app_get_stats(app, &mut snapshot), NVA_OK);
+            assert_eq!(snapshot.surface_generation, 3);
+
+            assert_eq!(nva_app_detach_window(app, 3), NVA_OK);
+            assert_eq!(nva_app_get_stats(app, &mut snapshot), NVA_OK);
+        }
+        assert_eq!(
+            snapshot.surface_generation, 3,
+            "detach keeps the last generation on purpose: #94 tells 'no window \
+             now' from 'which one last' with a flag of its own, and a 0 here \
+             would erase the second half"
+        );
+        assert_eq!(
+            snapshot.presents, 0,
+            "the host build records the window and starts no render thread"
+        );
+        assert_eq!(snapshot.submits, 0);
+
+        destroy(app);
+    }
+
+    #[test]
+    fn a_zero_sized_window_starts_no_swapchain() {
+        let app = create(ptr::null());
+        let mut snapshot = empty_stats();
+
+        // `surfaceCreated` can arrive before the view is measured; the shell's
+        // Java side skips 0-shaped `surfaceChanged`, but the runtime still
+        // records what it is told and must not build a 0x0 swapchain.
+        // SAFETY: `app` is live; the pointer is opaque to the runtime.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 0, 0, 1),
+                NVA_OK
+            );
+            assert_eq!(nva_app_get_stats(app, &mut snapshot), NVA_OK);
+            assert_eq!(nva_app_detach_window(app, 1), NVA_OK);
+        }
+        assert_eq!(snapshot.presents, 0, "no loop, no frames");
+        assert_eq!(
+            snapshot.surface_generation, 1,
+            "the window was still recorded, so its generation is still reported"
+        );
+
         destroy(app);
     }
 
