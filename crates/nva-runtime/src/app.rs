@@ -11,6 +11,23 @@
 //! at the recording on purpose. The surface/swapchain pair, and the engine that
 //! owns it, arrive with #93.
 //!
+//! ## Speaking to the shell
+//!
+//! Every transition and every refusal is one line through `nva_platform.log`
+//! (`desc.platform`, borrowed until `destroy`), tagged `nva-runtime`. The shell
+//! writes it to the same file as its own events, so one device run shows both
+//! ends of this seam interleaved (`docs/DEVICE-LOGS.md` §8). The callback always
+//! runs after the state guard is dropped: it reaches a file write, and holding
+//! the mutex across it would deadlock the moment a shell called back into
+//! `nva_app_*` from there.
+//!
+//! A shell that passes no platform logs nothing, which is not an error: the
+//! seam is optional (`desc.platform` may be NULL). Two silences are deliberate.
+//! `nva_app_create`'s own refusals stay unlogged, because a create that
+//! produced no object has no sink to speak through and the shell already logs
+//! that failure itself. `nva_app_get_stats` logs nothing either: it is a query,
+//! not an event, and logging one per frame would bury the events it sits among.
+//!
 //! ## Who owns the `ANativeWindow` reference
 //!
 //! The shell (`docs/ARCHITECTURE.md` §7.3): it acquires one reference before
@@ -27,15 +44,17 @@
 //! the shell has released a reference the runtime still points at, and none
 //! when the runtime holds a pointer past a release.
 
-use core::ffi::c_void;
+use core::ffi::{c_char, c_void, CStr};
 use core::mem::size_of;
 use core::ptr;
 
+use std::ffi::CString;
 use std::sync::{Mutex, MutexGuard};
 
 use nva_abi::{
-    nva_app_callbacks, nva_app_desc, nva_stats, nva_status, NVA_APP_CALLBACKS_VERSION,
-    NVA_APP_DESC_VERSION, NVA_ERR_INVALID_ARGUMENT, NVA_ERR_STALE, NVA_OK, NVA_STATS_VERSION,
+    nva_app_callbacks, nva_app_desc, nva_platform, nva_stats, nva_status,
+    NVA_APP_CALLBACKS_VERSION, NVA_APP_DESC_VERSION, NVA_ERR_INVALID_ARGUMENT, NVA_ERR_STALE,
+    NVA_LOG_ERROR, NVA_LOG_INFO, NVA_OK, NVA_PLATFORM_VERSION, NVA_STATS_VERSION,
 };
 
 /// Where the shell has taken the app, following Android's activity callbacks.
@@ -57,6 +76,105 @@ enum Lifecycle {
     Paused,
     /// Between `onStop` and the next `onStart`.
     Stopped,
+}
+
+impl Lifecycle {
+    /// The word this state carries in a log line, which is how a refusal says
+    /// which state it came from.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Started => "started",
+            Self::Resumed => "resumed",
+            Self::Paused => "paused",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+/// The tag on every line this module raises.
+const TAG: &CStr = c"nva-runtime";
+
+/// The shell's log callback, copied out of `nva_platform`.
+///
+/// Only the two fields this module uses are copied, so the rest of the module
+/// never has to reach back into the shell's struct. `log` is `None` when the
+/// shell passed no platform or left the field NULL; both mean "say nothing".
+#[derive(Clone, Copy)]
+struct PlatformSink {
+    user: *mut c_void,
+    log: Option<unsafe extern "C" fn(*mut c_void, u32, *const c_char, *const c_char)>,
+}
+
+impl PlatformSink {
+    /// A sink that raises nothing, for a shell that passes no platform.
+    fn none() -> Self {
+        Self {
+            user: ptr::null_mut(),
+            log: None,
+        }
+    }
+
+    fn from_platform(platform: &nva_platform) -> Self {
+        Self {
+            user: platform.user,
+            log: platform.log,
+        }
+    }
+
+    /// One line to the shell at `level`.
+    ///
+    /// A message with an interior NUL is dropped rather than cut: every message
+    /// here is built from literals and integers, so that arm is unreachable
+    /// today, and dropping keeps a future format string from turning into a
+    /// line that ends mid-sentence with no sign it was truncated.
+    fn say(&self, level: u32, message: &str) {
+        let Some(log) = self.log else {
+            return;
+        };
+        let Ok(message) = CString::new(message) else {
+            return;
+        };
+        // SAFETY: `log` is the shell's function, written into `nva_platform` and
+        // called with the C signature from `include/nva_abi.h` (user, level,
+        // tag, msg). `user` is the shell's own opaque pointer, unmodified; `TAG`
+        // is a `'static` C string and `message` outlives the call. The shell
+        // must keep whatever it reads behind them alive only for the call.
+        unsafe { log(self.user, level, TAG.as_ptr(), message.as_ptr()) };
+    }
+}
+
+/// What one export decided under the lock, and the line it speaks after
+/// dropping it.
+///
+/// Splitting the decision from the announcement is the point: the callback
+/// cannot run while the state guard is alive (see the module doc), so each
+/// export builds one of these inside the critical section and hands it to
+/// `say` once the guard is gone.
+struct Outcome {
+    status: nva_status,
+    level: u32,
+    text: String,
+}
+
+impl Outcome {
+    /// A transition that happened.
+    fn done(text: impl Into<String>) -> Self {
+        Self {
+            status: NVA_OK,
+            level: NVA_LOG_INFO,
+            text: text.into(),
+        }
+    }
+
+    /// A call that changed nothing, with the reason in `detail`.
+    fn refused(status: nva_status, operation: &str, detail: impl Into<String>) -> Self {
+        Self {
+            status,
+            level: NVA_LOG_ERROR,
+            text: format!("{operation} refused: {}", detail.into()),
+        }
+    }
 }
 
 /// The window the shell attached, borrowed until it is detached.
@@ -125,6 +243,9 @@ impl SurfaceCallbacks {
 pub struct App {
     state: Mutex<State>,
     callbacks: SurfaceCallbacks,
+    /// Where this object speaks. Behind no lock: it is copied at create and
+    /// never changes, so reading it cannot race the state.
+    platform: PlatformSink,
 }
 
 /// Locks the app state.
@@ -150,11 +271,13 @@ fn lock(app: &App) -> Result<MutexGuard<'_, State>, nva_status> {
 // SAFETY: `desc` and `out` are shell-owned and must stay readable/writable for
 // the whole call. Both are null-checked, and `size` / `version` are validated
 // before any other field is read, so a short or stale struct fails with
-// `NVA_ERR_INVALID_ARGUMENT` instead of being dereferenced. `desc.callbacks`,
-// when non-NULL, has its own `size` / `version` checked before it is read.
-// Nothing in `desc` is retained: `data_dir` and `platform` are not stored in
-// this skeleton, and the callback pointers are copied. On success `*out` owns
-// the boxed `App`, and only `nva_app_destroy` may free it.
+// `NVA_ERR_INVALID_ARGUMENT` instead of being dereferenced. `desc.callbacks` and
+// `desc.platform`, when non-NULL, have their own `size` / `version` checked
+// before they are read. Nothing in `desc` is retained: `data_dir` is not stored,
+// and the callback pointers and the two `nva_platform` fields this module uses
+// (`user`, `log`) are copied, so none of the shell's structs has to outlive the
+// call on this module's account. On success `*out` owns the boxed `App`, and
+// only `nva_app_destroy` may free it.
 #[no_mangle]
 pub unsafe extern "C" fn nva_app_create(
     desc: *const nva_app_desc,
@@ -184,12 +307,30 @@ pub unsafe extern "C" fn nva_app_create(
         SurfaceCallbacks::from_callbacks(callbacks)
     };
 
+    let platform = if desc.platform.is_null() {
+        PlatformSink::none()
+    } else {
+        // SAFETY: non-NULL, so the shell is handing over a platform struct; its
+        // `size` / `version` are checked before any field is read, so a stale
+        // struct is refused rather than misread. Only `user` and `log` are
+        // copied, and no other slot is touched — the audio, rumble and clock
+        // entries stay unimplemented until the tickets that need them.
+        let platform = unsafe { &*desc.platform };
+        if platform.size < size_of::<nva_platform>() as u32
+            || platform.version != NVA_PLATFORM_VERSION
+        {
+            return NVA_ERR_INVALID_ARGUMENT;
+        }
+        PlatformSink::from_platform(platform)
+    };
+
     let app = Box::new(App {
         state: Mutex::new(State {
             lifecycle: Lifecycle::Created,
             window: None,
         }),
         callbacks,
+        platform,
     });
     *out = Box::into_raw(app);
     NVA_OK
@@ -210,7 +351,9 @@ pub unsafe extern "C" fn nva_app_destroy(app: *mut App) {
     if app.is_null() {
         return;
     }
-    drop(Box::from_raw(app));
+    let app = Box::from_raw(app);
+    app.platform.say(NVA_LOG_INFO, "destroy");
+    drop(app);
 }
 
 /// Move to `Running` (`nva_app_start`, Android's `onStart`).
@@ -226,16 +369,28 @@ pub unsafe extern "C" fn nva_app_start(app: *mut App) -> nva_status {
     if app.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
-    let Ok(mut state) = lock(&*app) else {
-        return NVA_ERR_STALE;
-    };
-    match state.lifecycle {
-        Lifecycle::Created | Lifecycle::Stopped => {
-            state.lifecycle = Lifecycle::Started;
-            NVA_OK
+    let app = &*app;
+    // The guard drops at the end of this statement, before anything is said:
+    // the shell's callback writes a file and may call back into this module.
+    let outcome = match lock(app) {
+        Ok(mut state) => {
+            let from = state.lifecycle;
+            match from {
+                Lifecycle::Created | Lifecycle::Stopped => {
+                    state.lifecycle = Lifecycle::Started;
+                    Outcome::done("start")
+                }
+                Lifecycle::Started | Lifecycle::Resumed | Lifecycle::Paused => Outcome::refused(
+                    NVA_ERR_INVALID_ARGUMENT,
+                    "start",
+                    format!("no transition from {}", from.name()),
+                ),
+            }
         }
-        Lifecycle::Started | Lifecycle::Resumed | Lifecycle::Paused => NVA_ERR_INVALID_ARGUMENT,
-    }
+        Err(status) => Outcome::refused(status, "start", "the state lock is poisoned"),
+    };
+    app.platform.say(outcome.level, &outcome.text);
+    outcome.status
 }
 
 /// Move to `Paused` (`nva_app_pause`, Android's `onPause`).
@@ -249,18 +404,29 @@ pub unsafe extern "C" fn nva_app_pause(app: *mut App) -> nva_status {
     if app.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
-    let Ok(mut state) = lock(&*app) else {
-        return NVA_ERR_STALE;
+    let app = &*app;
+    let outcome = match lock(app) {
+        Ok(mut state) => {
+            let from = state.lifecycle;
+            match from {
+                Lifecycle::Resumed => {
+                    state.lifecycle = Lifecycle::Paused;
+                    Outcome::done("pause")
+                }
+                Lifecycle::Created
+                | Lifecycle::Started
+                | Lifecycle::Paused
+                | Lifecycle::Stopped => Outcome::refused(
+                    NVA_ERR_INVALID_ARGUMENT,
+                    "pause",
+                    format!("no transition from {}", from.name()),
+                ),
+            }
+        }
+        Err(status) => Outcome::refused(status, "pause", "the state lock is poisoned"),
     };
-    match state.lifecycle {
-        Lifecycle::Resumed => {
-            state.lifecycle = Lifecycle::Paused;
-            NVA_OK
-        }
-        Lifecycle::Created | Lifecycle::Started | Lifecycle::Paused | Lifecycle::Stopped => {
-            NVA_ERR_INVALID_ARGUMENT
-        }
-    }
+    app.platform.say(outcome.level, &outcome.text);
+    outcome.status
 }
 
 /// Move back to `Running` (`nva_app_resume`, Android's `onResume`).
@@ -274,16 +440,26 @@ pub unsafe extern "C" fn nva_app_resume(app: *mut App) -> nva_status {
     if app.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
-    let Ok(mut state) = lock(&*app) else {
-        return NVA_ERR_STALE;
-    };
-    match state.lifecycle {
-        Lifecycle::Started | Lifecycle::Paused => {
-            state.lifecycle = Lifecycle::Resumed;
-            NVA_OK
+    let app = &*app;
+    let outcome = match lock(app) {
+        Ok(mut state) => {
+            let from = state.lifecycle;
+            match from {
+                Lifecycle::Started | Lifecycle::Paused => {
+                    state.lifecycle = Lifecycle::Resumed;
+                    Outcome::done("resume")
+                }
+                Lifecycle::Created | Lifecycle::Resumed | Lifecycle::Stopped => Outcome::refused(
+                    NVA_ERR_INVALID_ARGUMENT,
+                    "resume",
+                    format!("no transition from {}", from.name()),
+                ),
+            }
         }
-        Lifecycle::Created | Lifecycle::Resumed | Lifecycle::Stopped => NVA_ERR_INVALID_ARGUMENT,
-    }
+        Err(status) => Outcome::refused(status, "resume", "the state lock is poisoned"),
+    };
+    app.platform.say(outcome.level, &outcome.text);
+    outcome.status
 }
 
 /// Move to `Stopped` (`nva_app_stop`, Android's `onStop`).
@@ -300,16 +476,26 @@ pub unsafe extern "C" fn nva_app_stop(app: *mut App) -> nva_status {
     if app.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
-    let Ok(mut state) = lock(&*app) else {
-        return NVA_ERR_STALE;
-    };
-    match state.lifecycle {
-        Lifecycle::Started | Lifecycle::Resumed | Lifecycle::Paused => {
-            state.lifecycle = Lifecycle::Stopped;
-            NVA_OK
+    let app = &*app;
+    let outcome = match lock(app) {
+        Ok(mut state) => {
+            let from = state.lifecycle;
+            match from {
+                Lifecycle::Started | Lifecycle::Resumed | Lifecycle::Paused => {
+                    state.lifecycle = Lifecycle::Stopped;
+                    Outcome::done("stop")
+                }
+                Lifecycle::Created | Lifecycle::Stopped => Outcome::refused(
+                    NVA_ERR_INVALID_ARGUMENT,
+                    "stop",
+                    format!("no transition from {}", from.name()),
+                ),
+            }
         }
-        Lifecycle::Created | Lifecycle::Stopped => NVA_ERR_INVALID_ARGUMENT,
-    }
+        Err(status) => Outcome::refused(status, "stop", "the state lock is poisoned"),
+    };
+    app.platform.say(outcome.level, &outcome.text);
+    outcome.status
 }
 
 /// Record the window the shell just got (`nva_app_attach_window`).
@@ -344,20 +530,35 @@ pub unsafe extern "C" fn nva_app_attach_window(
     height: u32,
     generation: u32,
 ) -> nva_status {
-    if app.is_null() || native_window.is_null() || generation == 0 {
+    if app.is_null() {
         return NVA_ERR_INVALID_ARGUMENT;
     }
     let app = &*app;
-    {
-        let Ok(mut state) = lock(app) else {
-            return NVA_ERR_STALE;
-        };
-        state.window = Some(AttachedWindow {
-            native: native_window,
-            width,
-            height,
-            generation,
-        });
+    let outcome = if native_window.is_null() {
+        Outcome::refused(NVA_ERR_INVALID_ARGUMENT, "attach", "the window is NULL")
+    } else if generation == 0 {
+        Outcome::refused(
+            NVA_ERR_INVALID_ARGUMENT,
+            "attach",
+            "generation 0 is reserved for 'no surface yet'",
+        )
+    } else {
+        match lock(app) {
+            Ok(mut state) => {
+                state.window = Some(AttachedWindow {
+                    native: native_window,
+                    width,
+                    height,
+                    generation,
+                });
+                Outcome::done(format!("attach generation={generation} {width}x{height}"))
+            }
+            Err(status) => Outcome::refused(status, "attach", "the state lock is poisoned"),
+        }
+    };
+    app.platform.say(outcome.level, &outcome.text);
+    if outcome.status != NVA_OK {
+        return outcome.status;
     }
     let callbacks = app.callbacks;
     if let Some(ready) = callbacks.ready {
@@ -389,15 +590,31 @@ pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -
         return NVA_ERR_INVALID_ARGUMENT;
     }
     let app = &*app;
-    {
-        let Ok(mut state) = lock(app) else {
-            return NVA_ERR_STALE;
-        };
-        match state.window.as_ref() {
-            Some(window) if window.generation == generation => {}
-            Some(_) | None => return NVA_ERR_INVALID_ARGUMENT,
+    let outcome = match lock(app) {
+        Ok(mut state) => {
+            // The refusal reason is built while the record is still borrowed,
+            // and the write below happens after that borrow ends.
+            let refusal = match state.window.as_ref() {
+                Some(window) if window.generation == generation => None,
+                Some(window) => Some(format!(
+                    "generation {generation} is not the attached one ({})",
+                    window.generation
+                )),
+                None => Some(String::from("no window is attached")),
+            };
+            match refusal {
+                None => {
+                    state.window = None;
+                    Outcome::done(format!("detach generation={generation}"))
+                }
+                Some(detail) => Outcome::refused(NVA_ERR_INVALID_ARGUMENT, "detach", detail),
+            }
         }
-        state.window = None;
+        Err(status) => Outcome::refused(status, "detach", "the state lock is poisoned"),
+    };
+    app.platform.say(outcome.level, &outcome.text);
+    if outcome.status != NVA_OK {
+        return outcome.status;
     }
     let callbacks = app.callbacks;
     if let Some(lost) = callbacks.lost {
@@ -474,15 +691,17 @@ pub unsafe extern "C" fn nva_app_get_stats(app: *mut App, out: *mut nva_stats) -
 
 #[cfg(test)]
 mod tests {
-    use core::ffi::c_void;
+    use core::ffi::{c_char, c_void, CStr};
     use core::mem::size_of;
     use core::ptr;
 
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
 
     use nva_abi::{
-        nva_app_callbacks, nva_app_desc, nva_stats, NVA_APP_CALLBACKS_VERSION,
-        NVA_APP_DESC_VERSION, NVA_ERR_INVALID_ARGUMENT, NVA_OK, NVA_STATS_VERSION,
+        nva_app_callbacks, nva_app_desc, nva_platform, nva_stats, NVA_APP_CALLBACKS_VERSION,
+        NVA_APP_DESC_VERSION, NVA_ERR_INVALID_ARGUMENT, NVA_LOG_ERROR, NVA_LOG_INFO, NVA_OK,
+        NVA_PLATFORM_VERSION, NVA_STATS_VERSION,
     };
 
     use super::{
@@ -538,6 +757,72 @@ mod tests {
         }
     }
 
+    /// One line the runtime said, as the shell's callback received it.
+    struct Logged {
+        level: u32,
+        tag: String,
+        text: String,
+    }
+
+    /// What the shell's `log` callback records. Each test owns one and passes it
+    /// as `user`, so the tests capture only their own lines and can still run in
+    /// parallel.
+    #[derive(Default)]
+    struct LogProbe {
+        lines: Mutex<Vec<Logged>>,
+    }
+
+    impl LogProbe {
+        /// Takes the lines said so far, leaving the probe empty.
+        fn take(&self) -> Vec<Logged> {
+            let mut lines = self.lines.lock().expect(
+                "the capture mutex is only poisoned by a test that panicked while it held it",
+            );
+            core::mem::take(&mut *lines)
+        }
+    }
+
+    unsafe extern "C" fn on_platform_log(
+        user: *mut c_void,
+        level: u32,
+        tag: *const c_char,
+        message: *const c_char,
+    ) {
+        // SAFETY: every test passes `user` as a pointer to a `LogProbe` that
+        // outlives the app it belongs to, and the runtime only reaches this
+        // callback through that app. `tag` and `message` are NUL-terminated
+        // strings the runtime keeps alive for the duration of the call.
+        let probe = unsafe { &*(user as *const LogProbe) };
+        let tag = unsafe { CStr::from_ptr(tag) }
+            .to_string_lossy()
+            .into_owned();
+        let text = unsafe { CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned();
+        probe
+            .lines
+            .lock()
+            .expect("as `LogProbe::take`")
+            .push(Logged { level, tag, text });
+    }
+
+    /// A platform whose only implemented entry is `log`.
+    fn log_platform(probe: &LogProbe) -> nva_platform {
+        nva_platform {
+            size: size_of::<nva_platform>() as u32,
+            version: NVA_PLATFORM_VERSION,
+            user: probe as *const LogProbe as *mut c_void,
+            audio_open: None,
+            audio_write: None,
+            audio_flush: None,
+            audio_close: None,
+            audio_set_volume: None,
+            rumble: None,
+            clock_now_ns: None,
+            log: Some(on_platform_log),
+        }
+    }
+
     fn desc(callbacks: *const nva_app_callbacks) -> nva_app_desc {
         nva_app_desc {
             size: size_of::<nva_app_desc>() as u32,
@@ -552,9 +837,21 @@ mod tests {
 
     /// Creates an app and returns it with the guard that destroys it.
     fn create(callbacks: *const nva_app_callbacks) -> *mut App {
-        let desc = desc(callbacks);
+        create_with_platform(callbacks, ptr::null())
+    }
+
+    /// As `create`, with a platform the runtime may speak through.
+    fn create_with_platform(
+        callbacks: *const nva_app_callbacks,
+        platform: *const nva_platform,
+    ) -> *mut App {
+        let desc = nva_app_desc {
+            platform,
+            ..desc(callbacks)
+        };
         let mut app: *mut App = ptr::null_mut();
-        // SAFETY: both pointers are to locals of this function.
+        // SAFETY: both pointers are to locals of this function, and `platform`
+        // outlives the app in every test that passes one.
         let status = unsafe { nva_app_create(&desc, &mut app) };
         assert_eq!(status, NVA_OK, "a well-formed desc must create an app");
         assert!(!app.is_null(), "create must hand out an object");
@@ -953,5 +1250,196 @@ mod tests {
             );
             nva_app_destroy(ptr::null_mut());
         }
+    }
+
+    #[test]
+    fn a_cold_start_records_each_transition_once() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: `app` is live and `1` is a valid generation; the window
+        // pointer is opaque to the runtime and never dereferenced.
+        unsafe {
+            assert_eq!(nva_app_start(app), NVA_OK);
+            assert_eq!(nva_app_resume(app), NVA_OK);
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 1080, 1920, 1),
+                NVA_OK
+            );
+        }
+        destroy(app);
+
+        let lines = logs.take();
+        let said: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                "start",
+                "resume",
+                "attach generation=1 1080x1920",
+                "destroy"
+            ],
+            "one info line per transition, in the order they happened"
+        );
+        for line in &lines {
+            assert_eq!(
+                line.level, NVA_LOG_INFO,
+                "transitions are info, got {}: {}",
+                line.level, line.text
+            );
+            assert_eq!(
+                line.tag, "nva-runtime",
+                "every line carries the runtime's tag"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_transition_is_an_error_line() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: `app` is live; the second start is the refusal under test.
+        unsafe {
+            assert_eq!(nva_app_start(app), NVA_OK);
+            logs.take();
+            assert_eq!(
+                nva_app_start(app),
+                NVA_ERR_INVALID_ARGUMENT,
+                "the refusal keeps the status it had before #101"
+            );
+        }
+        destroy(app);
+
+        let lines = logs.take();
+        assert_eq!(
+            lines.len(),
+            2,
+            "only the refusal and the destroy are said, got {}",
+            lines.len()
+        );
+        assert_eq!(lines[0].level, NVA_LOG_ERROR, "a refusal is an error line");
+        assert_eq!(
+            lines[0].text, "start refused: no transition from started",
+            "a refusal names the call and the state it came from"
+        );
+        assert_eq!(lines[1].text, "destroy");
+    }
+
+    #[test]
+    fn a_refused_attach_names_its_reason() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: both arguments are the invalid ones the export documents.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, ptr::null_mut(), 1080, 1920, 1),
+                NVA_ERR_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 1080, 1920, 0),
+                NVA_ERR_INVALID_ARGUMENT
+            );
+        }
+        destroy(app);
+
+        let lines = logs.take();
+        assert_eq!(
+            lines[0].text, "attach refused: the window is NULL",
+            "a NULL window says which argument was wrong"
+        );
+        assert_eq!(lines[0].level, NVA_LOG_ERROR);
+        assert_eq!(
+            lines[1].text,
+            "attach refused: generation 0 is reserved for 'no surface yet'"
+        );
+        assert_eq!(lines[1].level, NVA_LOG_ERROR);
+    }
+
+    #[test]
+    fn a_mismatched_detach_generation_is_an_error_line() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: `app` is live; 2 was never attached.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 1080, 1920, 1),
+                NVA_OK
+            );
+            assert_eq!(
+                nva_app_detach_window(app, 2),
+                NVA_ERR_INVALID_ARGUMENT,
+                "a mismatched generation is still refused with the same code"
+            );
+        }
+        destroy(app);
+
+        let lines = logs.take();
+        assert_eq!(lines[1].level, NVA_LOG_ERROR);
+        assert_eq!(
+            lines[1].text, "detach refused: generation 2 is not the attached one (1)",
+            "both generations appear, so the line says which side is wrong"
+        );
+    }
+
+    #[test]
+    fn a_malformed_platform_is_refused() {
+        let logs = LogProbe::default();
+        let mut app: *mut App = ptr::null_mut();
+
+        let stale = nva_platform {
+            version: NVA_PLATFORM_VERSION + 1,
+            ..log_platform(&logs)
+        };
+        let stale_desc = nva_app_desc {
+            platform: &stale,
+            ..desc(ptr::null())
+        };
+        // SAFETY: `stale_desc` points at locals that outlive the call.
+        assert_eq!(
+            unsafe { nva_app_create(&stale_desc, &mut app) },
+            NVA_ERR_INVALID_ARGUMENT,
+            "a platform with an unknown version must not be used"
+        );
+        assert!(app.is_null(), "a refused create leaves the out slot NULL");
+
+        let short = nva_platform {
+            size: (size_of::<nva_platform>() - 8) as u32,
+            ..log_platform(&logs)
+        };
+        let short_desc = nva_app_desc {
+            platform: &short,
+            ..desc(ptr::null())
+        };
+        // SAFETY: as above.
+        assert_eq!(
+            unsafe { nva_app_create(&short_desc, &mut app) },
+            NVA_ERR_INVALID_ARGUMENT,
+            "a platform shorter than the struct must not be used"
+        );
+        assert!(app.is_null());
+    }
+
+    #[test]
+    fn a_shell_with_no_platform_still_runs_the_state_machine() {
+        // No platform at all: every transition still happens, and nothing is
+        // said. This is the shape a shell without a log has always had.
+        let app = create(ptr::null());
+        // SAFETY: `app` is live; only the state machine is exercised.
+        unsafe {
+            assert_eq!(nva_app_start(app), NVA_OK);
+            assert_eq!(
+                nva_app_start(app),
+                NVA_ERR_INVALID_ARGUMENT,
+                "a refusal without a platform is still a refusal"
+            );
+        }
+        destroy(app);
     }
 }

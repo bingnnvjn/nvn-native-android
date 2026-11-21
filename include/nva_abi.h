@@ -273,6 +273,15 @@ typedef struct nva_audio_config {        /* 24 B */
 #define NVA_AUDIO_CONFIG_VERSION 1u
 #define NVA_AUDIO_FORMAT_I16 1u
 
+/*
+ * `nva_platform.log` 的等级。数值只在本 ABI 内有意义：它们不是 Android
+ * `Log.*` 的优先级（那是另一套 2..7），壳要自己映射，不能原样转发。
+ */
+#define NVA_LOG_ERROR 0u
+#define NVA_LOG_WARN  1u
+#define NVA_LOG_INFO  2u
+#define NVA_LOG_DEBUG 3u
+
 struct nva_platform {                    /* 80 B；壳实现，runtime 借用至 app destroy */
     uint32_t size, version;
     void *user;
@@ -283,6 +292,7 @@ struct nva_platform {                    /* 80 B；壳实现，runtime 借用至
     nva_status (*audio_set_volume)(void *user, uint64_t stream, float volume);
     nva_status (*rumble)(void *user, uint32_t low, uint32_t high, uint32_t duration_ms);
     uint64_t   (*clock_now_ns)(void *user, uint32_t clock_id);
+    /* level 取上面的 NVA_LOG_*；tag 是 C 字符串常量 */
     void       (*log)(void *user, uint32_t level, const char *tag, const char *msg);
 };
 #define NVA_PLATFORM_VERSION 1u

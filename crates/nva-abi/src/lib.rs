@@ -350,6 +350,15 @@ pub struct nva_audio_config {
 pub const NVA_AUDIO_CONFIG_VERSION: u32 = 1;
 pub const NVA_AUDIO_FORMAT_I16: u32 = 1;
 
+/// The `level` argument of `nva_platform.log`.
+///
+/// The numbers mean something only inside this ABI: they are not Android's
+/// `Log.*` priorities, so a shell maps them instead of forwarding them.
+pub const NVA_LOG_ERROR: u32 = 0;
+pub const NVA_LOG_WARN: u32 = 1;
+pub const NVA_LOG_INFO: u32 = 2;
+pub const NVA_LOG_DEBUG: u32 = 3;
+
 /// 80 B; implemented by the shell, borrowed by runtime until app destroy.
 #[repr(C)]
 pub struct nva_platform {

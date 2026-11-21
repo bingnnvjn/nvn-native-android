@@ -1,7 +1,7 @@
-# 设备日志（#99）
+# 设备日志（#99、#101）
 
-> 来源：票 #99（Parent #89）。状态：v2（2026-11-15，吸收 review 修正）。
-> 依据：#91（壳事件与词表）、docs/ARCHITECTURE.md §3.7（壳生命周期）。
+> 来源：票 #99（Parent #89）；§8 来自 #101（运行时事件）。状态：v2（2026-11-15，吸收 review 修正）。
+> 依据：#91（壳事件与词表）、docs/ARCHITECTURE.md §3.7（壳生命周期）、#101（`nva_platform.log`）。
 > 代码：`shell/android/jni/nva_shell_jni.c`（写）、`shell/android/java/com/bingnnvjn/nva/LogProvider.java`（读）。
 
 ## 1. 它解决什么
@@ -119,3 +119,39 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
 | `generation` | Java 侧 `MainActivity` 计数：`surfaceCreated` 加一，几何真的变了才加一，`surfaceDestroyed` 不加（§3.7） |
 | `WxH` | `windowAttached` 的入参，不是从 holder 现读的 |
 | `status` | 这次调用的返回码；非 0 的取值定义在 `include/nva_abi.h`，0 = 成功。三个入口没有可报告的返回值（`shellInfo` 返回字符串，`appDestroy` 底下的 `nva_app_destroy` 返回 void），它们的行恒记 0，含义是「入口正常返回」 |
+
+## 8. 运行时自己的行（#101）
+
+壳把 `nva_app_desc.platform` 指向 `nva_shell_jni.c` 的 `g_platform`，运行时于是能通过
+`nva_platform.log` 把状态迁移和拒绝写进**同一个** `nva-shell.log`：
+
+```
+13:40:12.408 [rt] info nva-runtime: start
+13:40:12.409 started status=0
+13:40:12.412 [rt] info nva-runtime: resume
+13:40:12.413 resumed status=0
+13:40:12.418 [rt] info nva-runtime: attach generation=1 1080x2160
+13:40:12.419 surface attached (generation=1) 1080x2160 status=0
+```
+
+- **`[rt]` 是唯一的区别。** 运行时行与壳行走同一个 `shell_log`：同一个 `HH:MM:SS.mmm` 前缀、
+  同一个文件、每行都 `fflush`。所以文件里的先后就是真实的先后——壳在自己那条里记的是
+  `nva_app_*` 的返回码，而运行时那条在调用内部就写下了，总在前。
+- **等级**取 `include/nva_abi.h` 的四个宏，壳映射成词：
+
+  | ABI 宏 | 数值 | 文件里的词 | 什么时候出现 |
+  |---|---|---|---|
+  | `NVA_LOG_ERROR` | 0 | `error` | 拒绝：迁移不合法、attach 被拒、代差不匹配、状态锁中毒 |
+  | `NVA_LOG_WARN` | 1 | `warn` | 本票不产生 |
+  | `NVA_LOG_INFO` | 2 | `info` | 迁移成功：`start` / `resume` / `pause` / `stop` / `attach` / `detach` / `destroy` |
+  | `NVA_LOG_DEBUG` | 3 | `debug` | 本票不产生 |
+
+  这四个数值只在本 ABI 内有意义，**不是** Android `Log.*` 的优先级（那是另一套 2..7）；
+  映射在壳里做，运行时不知道 Android 存在。
+- **一次迁移一行。** 冷启动是 `start`、`resume`、`attach generation=N WxH` 三条，各恰好一次。
+  拒绝是一条 `error`，形如 `start refused: no transition from started`——带上被拒的操作和它当时
+  所处的状态；`detach` 的代差不匹配会把两个代差都写出来。
+- **两种行不记**：`nva_app_create` 自己的拒绝（那一刻还没有对象，没有可说话的出口，而壳那边
+  已经有 `app create failed: status=N`），以及 `nva_app_get_stats` 的拒绝（查询不是事件，
+  逐帧记录会把事件埋掉）。两处都是判断，写在 `crates/nva-runtime/src/app.rs` 的模块注释里。
+
