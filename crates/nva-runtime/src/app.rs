@@ -63,16 +63,9 @@ use nva_abi::{
     NVA_LOG_ERROR, NVA_LOG_INFO, NVA_LOG_WARN, NVA_OK, NVA_PLATFORM_VERSION, NVA_STATS_VERSION,
 };
 
-/// The render thread's engine, only on the platform that has a window to
-/// present into.
-///
-/// The engine's file is `src/window.rs` but the declaration has to sit here:
-/// this is the module that owns the loop's lifetime, and a submodule declared
-/// in `app.rs` would otherwise be looked for in `src/app/`. `#[path]` bridges
-/// the two.
+/// The presentation engine's types (`window.rs`, declared in `lib.rs`).
 #[cfg(target_os = "android")]
-#[path = "window.rs"]
-mod window;
+use crate::window::{FirstFrame, RenderLoop, StartRequest, FIRST_FRAME_TIMEOUT};
 
 /// Where the shell has taken the app, following Android's activity callbacks.
 ///
@@ -221,7 +214,7 @@ struct State {
     /// has one: the host build records the window and starts nothing, which is
     /// what the PC smoke tests rely on (`0x1000` is not a real window).
     #[cfg(target_os = "android")]
-    render: Option<window::RenderLoop>,
+    render: Option<RenderLoop>,
 }
 
 /// What the render thread counts, shared with `nva_app_get_stats`.
@@ -230,29 +223,34 @@ struct State {
 /// hold a pointer into a value the shell owns by raw pointer: one allocation,
 /// two owners, stable addresses. The counters publish no other data, so
 /// `Relaxed` is enough — a snapshot is a sample, not a synchronisation point.
-///
-/// The two recorders are called by the platform build's render thread only, so
-/// they are silenced on the host build instead of around the whole module.
 #[derive(Default)]
-pub(super) struct RenderCounters {
+pub(crate) struct RenderCounters {
     presents: AtomicU32,
     submits: AtomicU64,
 }
 
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 impl RenderCounters {
-    pub(super) fn record_present(&self) {
+    /// Counts one frame that reached the display.
+    ///
+    /// Called by the platform build's render thread, which is why only this
+    /// method and [`Self::record_submit`] are silenced on the host build.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) fn record_present(&self) {
         self.presents.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(super) fn record_submit(&self) {
+    /// Counts one `vkQueueSubmit` the render loop made.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) fn record_submit(&self) {
         self.submits.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// The frames that reached the display.
     fn presents(&self) -> u32 {
         self.presents.load(Ordering::Relaxed)
     }
 
+    /// The queue submits the render loop made.
     fn submits(&self) -> u64 {
         self.submits.load(Ordering::Relaxed)
     }
@@ -328,34 +326,45 @@ impl App {
     }
 }
 
-/// Starting and stopping the render thread.
+/// Starting, stopping and reporting the render thread.
 ///
-/// Both run on the shell's thread, between the state transitions in `attach`,
-/// `detach` and `destroy`. The loop itself is joined here and nowhere else:
-/// detach must not return while a submit could still be in flight, and the
-/// shell releases its `ANativeWindow` reference as soon as it does.
+/// Every method here runs on the shell's thread, between the state transitions
+/// in `attach`, `detach` and `destroy`. The loop itself is joined here and
+/// nowhere else: detach must not return while a submit could still be in
+/// flight, and the shell releases its `ANativeWindow` reference as soon as it
+/// does.
 impl App {
+    /// Says the notes one stage of the render loop left behind, each on its own
+    /// line, prefixed with the call that is reporting them.
+    ///
+    /// `when` is `attach`, `detach` or `destroy`: the notes carry only what
+    /// happened (`suboptimal`, `out of date`, why the loop stopped), so the
+    /// moment they are printed is what puts them in a run's story.
+    fn say_notes(&self, when: &str, notes: Vec<String>) {
+        for note in notes {
+            self.platform.say(NVA_LOG_WARN, &format!("{when}: {note}"));
+        }
+    }
+
     /// Stops the render thread, if one is running, and hands back what it noted.
     ///
     /// Off the platform build there is no thread — `attach` only ever recorded
     /// the window — so this is empty and the call sites stay identical.
     #[cfg(not(target_os = "android"))]
-    fn stop_engine(&self) -> Vec<String> {
+    fn stop_render_loop(&self) -> Vec<String> {
         Vec::new()
     }
 
     #[cfg(target_os = "android")]
-    fn stop_engine(&self) -> Vec<String> {
-        let engine = match lock(self) {
+    fn stop_render_loop(&self) -> Vec<String> {
+        let render = match lock(self) {
             Ok(mut state) => state.render.take(),
             // The state lock is poisoned, which `panic = "abort"` makes
             // unreachable in a product build (`lock`). Nothing is left that
             // could be joined safely, so the call site finds no loop.
             Err(_) => None,
         };
-        engine
-            .map(window::RenderLoop::stop_and_join)
-            .unwrap_or_default()
+        render.map(RenderLoop::stop_and_join).unwrap_or_default()
     }
 
     /// Starts the render thread for a window `attach` just recorded.
@@ -364,18 +373,16 @@ impl App {
     /// must be joined before the shell releases its reference to the old
     /// window, and two loops presenting into two windows is never wanted.
     #[cfg(target_os = "android")]
-    fn start_engine(&self, window: AttachedWindow) {
-        for note in self.stop_engine() {
-            self.platform.say(NVA_LOG_WARN, &format!("attach: {note}"));
-        }
-        let request = window::StartRequest {
+    fn start_render_loop(&self, window: AttachedWindow) {
+        self.say_notes("attach", self.stop_render_loop());
+        let request = StartRequest {
             native: window.native,
             width: window.width,
             height: window.height,
             generation: window.generation,
             counters: Arc::clone(&self.counters),
         };
-        let render = match window::start(request) {
+        let render = match crate::window::start(request) {
             // A zero-sized surface: the window is recorded, and the next attach
             // (surfaceChanged) carries the measurement.
             Ok(None) => return,
@@ -401,19 +408,20 @@ impl App {
                 return;
             }
         }
-        match progress.wait(window::FIRST_FRAME_TIMEOUT) {
+        match progress.wait(FIRST_FRAME_TIMEOUT) {
             // Nothing to say: `presents` in the snapshot is the evidence.
-            window::FirstFrame::Presented => {}
-            window::FirstFrame::Pending => self
-                .platform
-                .say(NVA_LOG_ERROR, "attach: first frame not ready in 1s"),
-            window::FirstFrame::Failed(reason) => self
+            FirstFrame::Presented => {}
+            // A timeout is not a failure (`window.rs`), so it is not an error
+            // line either: the loop keeps presenting and `presents` will say so.
+            FirstFrame::Pending => self.platform.say(
+                NVA_LOG_WARN,
+                &format!("attach: first frame not ready in {FIRST_FRAME_TIMEOUT:?}"),
+            ),
+            FirstFrame::Failed(reason) => self
                 .platform
                 .say(NVA_LOG_ERROR, &format!("attach: {reason}")),
         }
-        for note in progress.take_notes() {
-            self.platform.say(NVA_LOG_WARN, &format!("attach: {note}"));
-        }
+        self.say_notes("attach", progress.take_notes());
     }
 }
 
@@ -528,9 +536,7 @@ pub unsafe extern "C" fn nva_app_destroy(app: *mut App) {
     // A destroy with a window still attached is a shell that skipped
     // `surfaceDestroyed`. The loop must still be joined here: it is the last
     // moment anything can present into that window.
-    for note in app.stop_engine() {
-        app.platform.say(NVA_LOG_WARN, &format!("destroy: {note}"));
-    }
+    app.say_notes("destroy", app.stop_render_loop());
     app.platform.say(NVA_LOG_INFO, "destroy");
     drop(app);
 }
@@ -751,7 +757,7 @@ pub unsafe extern "C" fn nva_app_attach_window(
     app.last_generation.store(generation, Ordering::Relaxed);
     #[cfg(target_os = "android")]
     if let Some(window) = recorded {
-        app.start_engine(window);
+        app.start_render_loop(window);
     }
     let callbacks = app.callbacks;
     if let Some(ready) = callbacks.ready {
@@ -819,16 +825,14 @@ pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -
     // Only a detach that happened takes the loop down; a refusal must leave it
     // presenting into the window the record still names.
     let notes = if outcome.status == NVA_OK {
-        app.stop_engine()
+        app.stop_render_loop()
     } else {
         Vec::new()
     };
     if app.announce(&outcome) != NVA_OK {
         return outcome.status;
     }
-    for note in notes {
-        app.platform.say(NVA_LOG_WARN, &format!("detach: {note}"));
-    }
+    app.say_notes("detach", notes);
     let callbacks = app.callbacks;
     if let Some(lost) = callbacks.lost {
         // SAFETY: `lost` is a shell function the shell wrote into
@@ -1501,13 +1505,15 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_sized_window_starts_no_swapchain() {
+    fn a_zero_sized_window_is_recorded_and_presents_nothing() {
         let app = create(ptr::null());
         let mut snapshot = empty_stats();
 
-        // `surfaceCreated` can arrive before the view is measured; the shell's
-        // Java side skips 0-shaped `surfaceChanged`, but the runtime still
-        // records what it is told and must not build a 0x0 swapchain.
+        // `surfaceCreated` can arrive before the view is measured. This test
+        // pins the *record* semantics — the window is stored, its generation is
+        // reported, and no frame is counted — which is all the host build can
+        // see; the zero-size guard that refuses to build a 0x0 swapchain lives
+        // in `window.rs` and only exists on the Android target.
         // SAFETY: `app` is live; the pointer is opaque to the runtime.
         unsafe {
             assert_eq!(

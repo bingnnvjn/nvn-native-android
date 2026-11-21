@@ -31,7 +31,7 @@
 //!
 //! ## Only on Android
 //!
-//! `app.rs` declares this module under `#[cfg(target_os = "android")]`: every
+//! `lib.rs` declares this module under `#[cfg(target_os = "android")]`: every
 //! path here is a platform call, and the host build must keep the PC smoke
 //! tests' zero-sized, `0x1000`-sentinel attach untouched (a dereference of that
 //! pointer would crash the test process).
@@ -39,10 +39,11 @@
 //! ## One template, no copy
 //!
 //! The device, surface, swapchain and command objects are created inside the
-//! thread and destroyed on the way out, by [`Presenter`]'s `Drop`. A failed
-//! setup abandons whatever it had created — a leak, never a dangling handle,
-//! and the thread exits immediately afterwards, so it is one leak per failed
-//! attach attempt rather than one per frame.
+//! thread and destroyed on the way out, by [`Presenter`]'s `Drop`. That includes
+//! the failure path: `Presenter::new` stores each object as soon as it exists,
+//! so a `?` half-way through is cleaned up by the same `Drop` the normal exit
+//! uses. A failed attach (both `surfaceCreated` and `surfaceChanged` can start
+//! one) leaks nothing and leaves nothing dangling.
 
 use core::ffi::{c_void, CStr};
 
@@ -53,7 +54,7 @@ use std::time::{Duration, Instant};
 
 use ash::vk;
 
-use super::RenderCounters;
+use crate::app::RenderCounters;
 
 /// How long `attach` waits for the loop's first present.
 ///
@@ -62,7 +63,7 @@ use super::RenderCounters;
 /// timeout is not a failure (`docs/GATES.md` §4 reads `presents` out of the
 /// snapshot, not out of this wait): the line is evidence, and the loop keeps
 /// going.
-pub(super) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
+pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// How long one `vkAcquireNextImageKHR` may block before the loop re-checks
 /// `stop`.
@@ -70,9 +71,14 @@ pub(super) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 /// An infinite wait would be the spec-idiomatic choice and would deadlock
 /// `detach`: FIFO stops handing images out once the compositor stops consuming
 /// them (HOME with the surface still alive), and `detach` joins this thread
-/// from the shell's main thread. The finite wait bounds that join, and 20 ms
-/// keeps the whole detach inside the ≤50 ms the UI may block
-/// (`docs/ARCHITECTURE.md` §3.7) with room for one frame's fence wait.
+/// from the shell's main thread. This timeout bounds *that wait* and nothing
+/// else — `wait_for_fences` and `device_wait_idle` stay unbounded on purpose,
+/// because a device that stops signalling reports `VK_ERROR_DEVICE_LOST`
+/// instead of hanging, and a lost device is the case they exist to report.
+///
+/// 20 ms means at most 50 wakeups a second while the loop is idle, and keeps
+/// the join inside the ≤50 ms the UI may block (`docs/ARCHITECTURE.md` §3.7)
+/// with room for one frame's fence wait.
 const ACQUIRE_TIMEOUT_NS: u64 = 20_000_000;
 
 /// The clear colour behind `0xff00ff00`.
@@ -129,18 +135,27 @@ impl Drop for EngineWindow {
     }
 }
 
-// SAFETY: the field is an `ANativeWindow` reference this value owns. Vulkan's
-// `VkAndroidSurfaceKHR` and `ANativeWindow_*` both accept the handle from any
-// thread; the ownership, not the thread, is what makes the move sound.
+// SAFETY: three things make the move sound, and each is a property this type
+// keeps rather than a promise about the caller.
+//
+// 1. It owns exactly one `ANativeWindow` reference, taken in `acquire` and
+//    released in `Drop`; it is moved once (into the job, then into the thread)
+//    and never shared — the type has no `Sync`, so no `&EngineWindow` can be
+//    handed to another thread.
+// 2. `ANativeWindow_acquire`/`_release` are reference counts on an AOSP
+//    `RefBase`, which are atomic; a count may be taken and dropped from
+//    different threads.
+// 3. The only other use of the pointer is `vkCreateAndroidSurfaceKHR`, and that
+//    happens on the render thread with an instance the thread owns outright.
 unsafe impl Send for EngineWindow {}
 
 /// What `app.rs` hands the new thread. Owned, so nothing is borrowed across it.
-pub(super) struct StartRequest {
-    pub(super) native: *mut c_void,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) generation: u32,
-    pub(super) counters: Arc<RenderCounters>,
+pub(crate) struct StartRequest {
+    pub(crate) native: *mut c_void,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) generation: u32,
+    pub(crate) counters: Arc<RenderCounters>,
 }
 
 /// The owned work one render thread performs.
@@ -158,19 +173,13 @@ struct RenderJob {
     progress: Arc<Progress>,
 }
 
-// SAFETY: every field is owned by the job — the window reference, copy values,
-// and `Arc`s of `Send + Sync` state. The job is moved into the thread once and
-// never touched by the shell again; the shell only sees `stop` and `progress`
-// through their `Arc`s.
-unsafe impl Send for RenderJob {}
-
 /// What the render loop has to say about the first frame, and the notes it
 /// leaves behind.
 ///
 /// This is the whole cross-thread conversation: a `Mutex` and a `Condvar`, no
 /// locks shared with `App`, and no way for the shell thread to wait longer than
 /// [`FIRST_FRAME_TIMEOUT`].
-pub(super) struct Progress {
+pub(crate) struct Progress {
     state: Mutex<ProgressState>,
     changed: Condvar,
 }
@@ -181,7 +190,7 @@ struct ProgressState {
 }
 
 /// The answer [`Progress::wait`] gives, and the line `attach` builds from it.
-pub(super) enum FirstFrame {
+pub(crate) enum FirstFrame {
     /// No present yet — the wait timed out.
     Pending,
     /// The loop presented at least once.
@@ -206,7 +215,7 @@ impl Progress {
     /// A poisoned lock is reported as a failure rather than recovered
     /// (`LOCAL §4` makes the recovery exception for `PENDING` only). Under
     /// `panic = "abort"` (`LOCAL §1`) the branch cannot be taken.
-    pub(super) fn wait(&self, timeout: Duration) -> FirstFrame {
+    pub(crate) fn wait(&self, timeout: Duration) -> FirstFrame {
         let Ok(mut state) = self.state.lock() else {
             return FirstFrame::Failed(String::from("the render progress lock is poisoned"));
         };
@@ -273,7 +282,7 @@ impl Progress {
     }
 
     /// Takes the notes said so far, leaving the pad empty.
-    pub(super) fn take_notes(&self) -> Vec<String> {
+    pub(crate) fn take_notes(&self) -> Vec<String> {
         let Ok(mut state) = self.state.lock() else {
             return Vec::new();
         };
@@ -283,13 +292,13 @@ impl Progress {
 
 /// Adds `note` unless it is already there or the pad is full.
 fn push_note(notes: &mut Vec<String>, note: String) {
-    if notes.len() < MAX_NOTES && !notes.iter().any(|said| said == &note) {
+    if notes.len() < MAX_NOTES && !notes.contains(&note) {
         notes.push(note);
     }
 }
 
 /// The handle `App` keeps while a window is attached.
-pub(super) struct RenderLoop {
+pub(crate) struct RenderLoop {
     /// `Option` so `stop_and_join` can move the handle out of a type that owns a
     /// `Drop` impl; the flag in that impl is the net for a loop dropped without
     /// a join.
@@ -300,7 +309,7 @@ pub(super) struct RenderLoop {
 
 impl RenderLoop {
     /// The shared report, so `attach` can wait after the loop is in the state.
-    pub(super) fn progress(&self) -> Arc<Progress> {
+    pub(crate) fn progress(&self) -> Arc<Progress> {
         Arc::clone(&self.progress)
     }
 
@@ -309,7 +318,7 @@ impl RenderLoop {
     /// After this returns nothing can submit for the window, which is what lets
     /// `detach` tell the shell the surface is gone and what lets the shell
     /// release its `ANativeWindow` reference (§7.3).
-    pub(super) fn stop_and_join(mut self) -> Vec<String> {
+    pub(crate) fn stop_and_join(mut self) -> Vec<String> {
         self.stop.store(true, Ordering::Release);
         if let Some(handle) = self.handle.take() {
             // A panicking thread would take the process with it under
@@ -338,7 +347,7 @@ impl Drop for RenderLoop {
 /// zero-sized surface (`surfaceCreated` before measurement, so the next
 /// `surfaceChanged` will attach again). `Err` means the thread could not be
 /// created, and the text is what `attach` prints.
-pub(super) fn start(request: StartRequest) -> Result<Option<RenderLoop>, String> {
+pub(crate) fn start(request: StartRequest) -> Result<Option<RenderLoop>, String> {
     if request.width == 0 || request.height == 0 {
         // A 0x0 swapchain is invalid; the next attach carries the measured
         // size. The window stays recorded, so a detach still matches it.
@@ -394,17 +403,16 @@ fn thread_main(job: RenderJob) {
 /// Called once, on the thread that owns `job`. `job.window` is a live
 /// `ANativeWindow` reference for the whole call.
 unsafe fn present_loop(job: &RenderJob) -> Result<(), String> {
-    let mut presenter = Presenter::new(job.window.native, job.width, job.height)?;
+    let presenter = Presenter::new(job.window.native, job.width, job.height)?;
     while !job.stop.load(Ordering::Acquire) {
+        // The frame and the submit are counted inside `present`; the loop only
+        // records that the first frame arrived and says what the surface is
+        // doing.
         match presenter.present(&job.counters, &job.stop) {
-            Ok(Presented::Frame) => {
-                job.counters.record_present();
-                job.progress.presented();
-            }
+            Ok(Presented::Frame) => job.progress.presented(),
             Ok(Presented::Suboptimal) => {
                 // The image did go up. Rebuilding belongs to a later ticket
                 // (out of scope here), so the loop says so once and carries on.
-                job.counters.record_present();
                 job.progress.presented();
                 job.progress.note(String::from(
                     "the swapchain is suboptimal for the surface; #93 does not rebuild it",
@@ -449,16 +457,27 @@ enum PresentError {
 
 /// The WSI object graph for one attached window.
 ///
-/// Fields are destroyed by the `Drop` impl, in reverse creation order; `_entry`
-/// is dropped last (after `drop` returns) because the loader library must stay
-/// loaded until `vkDestroyInstance` has run.
+/// Four fields own an object that only a loader-bearing call can destroy: the
+/// instance, the instance's surface, the device and the swapchain. They are
+/// `Option` so `Drop` can tell "created" from "did not get that far": `new`
+/// fills every one of them before it returns `Ok`, so no code outside `new`
+/// sees a `None` except the one guard at the top of [`Self::present`]. Every
+/// other field is a handle whose `destroy_*` call accepts `VK_NULL_HANDLE`, so
+/// "not created yet" needs no representation of its own; the vectors start
+/// empty and take what has been created.
+///
+/// `Drop` is the only teardown path, which is what makes an early `?` in `new`
+/// harmless: it destroys whatever the fields hold, in reverse creation order.
+/// `_entry` is dropped last (the loader library must stay loaded until
+/// `vkDestroyInstance` has run), which is true because it is a field and fields
+/// drop after `drop` returns.
 struct Presenter {
     _entry: ash::Entry,
-    instance: ash::Instance,
+    instance: Option<ash::Instance>,
+    surface_loader: Option<ash::khr::surface::Instance>,
     surface: vk::SurfaceKHR,
-    surface_loader: ash::khr::surface::Instance,
-    device: ash::Device,
-    swapchain_loader: ash::khr::swapchain::Device,
+    device: Option<ash::Device>,
+    swapchain_loader: Option<ash::khr::swapchain::Device>,
     swapchain: vk::SwapchainKHR,
     render_pass: vk::RenderPass,
     /// One view per swapchain image. The framebuffers name them, so they are
@@ -476,43 +495,98 @@ struct Presenter {
 }
 
 impl Presenter {
+    /// The state before anything has been created: one entry, everything else
+    /// "absent" in the form `Drop` understands.
+    fn empty(entry: ash::Entry) -> Self {
+        Self {
+            _entry: entry,
+            instance: None,
+            surface_loader: None,
+            surface: vk::SurfaceKHR::null(),
+            device: None,
+            swapchain_loader: None,
+            swapchain: vk::SwapchainKHR::null(),
+            render_pass: vk::RenderPass::null(),
+            image_views: Vec::new(),
+            framebuffers: Vec::new(),
+            queue: vk::Queue::null(),
+            command_pool: vk::CommandPool::null(),
+            command_buffer: vk::CommandBuffer::null(),
+            image_available: vk::Semaphore::null(),
+            render_finished: vk::Semaphore::null(),
+            in_flight: vk::Fence::null(),
+            extent: vk::Extent2D::default(),
+        }
+    }
+
     /// Builds the instance, surface, device and presentation objects.
+    ///
+    /// Each object is stored in the `Presenter` being built as soon as it
+    /// exists, so every `?` below is cleaned up by the `Drop` impl below and
+    /// nothing is left orphaned. That matters because a failed attach is not
+    /// hypothetical: `surfaceCreated` and `surfaceChanged` both start one, so a
+    /// rotation that fails twice would otherwise leak two instances.
     ///
     /// # Safety
     /// `window` must be a live `ANativeWindow` reference that outlives the
     /// returned value; `present_loop` passes the job's own reference.
     unsafe fn new(window: *mut c_void, width: u32, height: u32) -> Result<Self, String> {
         let entry = ash::Entry::load().map_err(|error| format!("load libvulkan: {error}"))?;
-        let instance = create_instance(&entry)?;
-        let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
-        let android_loader = ash::khr::android_surface::Instance::new(&entry, &instance);
-        let surface = android_loader
+        let mut presenter = Self::empty(entry);
+
+        let instance = create_instance(&presenter._entry)?;
+        let surface_loader = ash::khr::surface::Instance::new(&presenter._entry, &instance);
+        let android_loader = ash::khr::android_surface::Instance::new(&presenter._entry, &instance);
+        presenter.instance = Some(instance);
+        presenter.surface_loader = Some(surface_loader);
+        // The `let … else` reborrows below cannot be `None` — the lines just
+        // above filled them in — but they are the non-panicking form of that
+        // invariant: a render thread has no useful panic path, so a broken
+        // invariant reads like any other setup failure.
+        let Some(instance) = presenter.instance.as_ref() else {
+            return Err(String::from("the instance was not installed"));
+        };
+        presenter.surface = android_loader
             .create_android_surface(
                 &vk::AndroidSurfaceCreateInfoKHR::default().window(window),
                 None,
             )
             .map_err(|error| format!("vkCreateAndroidSurfaceKHR: {error}"))?;
-        let (physical, family) = choose_device(&instance, &surface_loader, surface)?;
-        let device = create_device(&instance, physical, family)?;
-        let queue = device.get_device_queue(family, 0);
-        let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
+        let Some(surface_loader) = presenter.surface_loader.as_ref() else {
+            return Err(String::from("the surface loader was not installed"));
+        };
+
+        let (physical, family) = choose_device(instance, surface_loader, presenter.surface)?;
+        let device = create_device(instance, physical, family)?;
+        let swapchain_loader = ash::khr::swapchain::Device::new(instance, &device);
+        presenter.queue = device.get_device_queue(family, 0);
+        presenter.device = Some(device);
+        presenter.swapchain_loader = Some(swapchain_loader);
+        let Some(device) = presenter.device.as_ref() else {
+            return Err(String::from("the device was not installed"));
+        };
+        let Some(swapchain_loader) = presenter.swapchain_loader.as_ref() else {
+            return Err(String::from("the swapchain loader was not installed"));
+        };
+
         let Swapchain {
-            handle: swapchain,
+            handle,
             format,
             extent,
             render_pass,
             images,
         } = create_swapchain(
-            &surface_loader,
-            &swapchain_loader,
+            surface_loader,
+            swapchain_loader,
             physical,
-            surface,
-            &device,
+            presenter.surface,
+            device,
             vk::Extent2D { width, height },
         )?;
+        presenter.swapchain = handle;
+        presenter.render_pass = render_pass;
+        presenter.extent = extent;
 
-        let mut image_views = Vec::with_capacity(images.len());
-        let mut framebuffers = Vec::with_capacity(images.len());
         for image in &images {
             let view = device
                 .create_image_view(
@@ -532,6 +606,7 @@ impl Presenter {
                     None,
                 )
                 .map_err(|error| format!("vkCreateImageView: {error}"))?;
+            presenter.image_views.push(view);
             let framebuffer = device
                 .create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -543,11 +618,10 @@ impl Presenter {
                     None,
                 )
                 .map_err(|error| format!("vkCreateFramebuffer: {error}"))?;
-            image_views.push(view);
-            framebuffers.push(framebuffer);
+            presenter.framebuffers.push(framebuffer);
         }
 
-        let command_pool = device
+        presenter.command_pool = device
             .create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
                     .queue_family_index(family)
@@ -555,57 +629,56 @@ impl Presenter {
                 None,
             )
             .map_err(|error| format!("vkCreateCommandPool: {error}"))?;
-        let command_buffer = device
+        presenter.command_buffer = device
             .allocate_command_buffers(
                 &vk::CommandBufferAllocateInfo::default()
-                    .command_pool(command_pool)
+                    .command_pool(presenter.command_pool)
                     .level(vk::CommandBufferLevel::PRIMARY)
                     .command_buffer_count(1),
             )
-            .map_err(|error| format!("vkAllocateCommandBuffers: {error}"))?[0];
-        let image_available = device
+            .map_err(|error| format!("vkAllocateCommandBuffers: {error}"))?
+            .first()
+            .copied()
+            .ok_or_else(|| String::from("vkAllocateCommandBuffers returned no buffer"))?;
+        presenter.image_available = device
             .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
             .map_err(|error| format!("vkCreateSemaphore(image available): {error}"))?;
-        let render_finished = device
+        presenter.render_finished = device
             .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
             .map_err(|error| format!("vkCreateSemaphore(render finished): {error}"))?;
-        let in_flight = device
+        presenter.in_flight = device
             .create_fence(&vk::FenceCreateInfo::default(), None)
             .map_err(|error| format!("vkCreateFence: {error}"))?;
 
-        Ok(Self {
-            _entry: entry,
-            instance,
-            surface,
-            surface_loader,
-            device,
-            swapchain_loader,
-            swapchain,
-            render_pass,
-            image_views,
-            framebuffers,
-            queue,
-            command_pool,
-            command_buffer,
-            image_available,
-            render_finished,
-            in_flight,
-            extent,
-        })
+        Ok(presenter)
     }
 
-    /// Clears one swapchain image and presents it, waiting for completion.
+    /// Clears one swapchain image, presents it, and waits for completion.
+    ///
+    /// Answers "did the surface still match the swapchain exactly", and counts
+    /// the frame and the submit in `counters` — the loop that calls this has
+    /// nothing to add to either count.
     ///
     /// # Safety
     /// Called on the thread that owns the device; the queue, command buffer and
     /// semaphores are used by no other thread.
     unsafe fn present(
-        &mut self,
+        &self,
         counters: &RenderCounters,
         stop: &AtomicBool,
     ) -> Result<Presented, PresentError> {
+        let (Some(device), Some(swapchain_loader)) =
+            (self.device.as_ref(), self.swapchain_loader.as_ref())
+        else {
+            // `new` fills both before it returns `Ok`. This arm is the total
+            // form of that invariant: a render thread has no useful panic path,
+            // and the loop turns the error into a note.
+            return Err(PresentError::Failed(String::from(
+                "the presenter was not completed",
+            )));
+        };
         let (index, suboptimal) = loop {
-            match self.swapchain_loader.acquire_next_image(
+            match swapchain_loader.acquire_next_image(
                 self.swapchain,
                 ACQUIRE_TIMEOUT_NS,
                 self.image_available,
@@ -633,13 +706,13 @@ impl Presenter {
             )));
         };
 
-        self.device
+        device
             .reset_fences(std::slice::from_ref(&self.in_flight))
             .map_err(|error| PresentError::Failed(format!("vkResetFences: {error}")))?;
-        self.device
+        device
             .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
             .map_err(|error| PresentError::Failed(format!("vkResetCommandBuffer: {error}")))?;
-        self.device
+        device
             .begin_command_buffer(
                 self.command_buffer,
                 &vk::CommandBufferBeginInfo::default()
@@ -658,10 +731,9 @@ impl Presenter {
                 extent: self.extent,
             })
             .clear_values(std::slice::from_ref(&clear));
-        self.device
-            .cmd_begin_render_pass(self.command_buffer, &begin, vk::SubpassContents::INLINE);
-        self.device.cmd_end_render_pass(self.command_buffer);
-        self.device
+        device.cmd_begin_render_pass(self.command_buffer, &begin, vk::SubpassContents::INLINE);
+        device.cmd_end_render_pass(self.command_buffer);
+        device
             .end_command_buffer(self.command_buffer)
             .map_err(|error| PresentError::Failed(format!("vkEndCommandBuffer: {error}")))?;
 
@@ -670,26 +742,35 @@ impl Presenter {
             .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
             .command_buffers(std::slice::from_ref(&self.command_buffer))
             .signal_semaphores(std::slice::from_ref(&self.render_finished));
-        self.device
+        device
             .queue_submit(self.queue, std::slice::from_ref(&submit), self.in_flight)
             .map_err(|error| PresentError::Failed(format!("vkQueueSubmit: {error}")))?;
         counters.record_submit();
-        // One submit in flight: waiting the fence is waiting the frame, and it
-        // is what makes the present below the last thing that can fail.
-        self.device
-            .wait_for_fences(std::slice::from_ref(&self.in_flight), true, u64::MAX)
+        // One submit in flight, so waiting its fence is waiting the frame; it is
+        // also what makes the present below the last thing that can fail. The
+        // wait is unbounded on purpose — a device that stops signalling reports
+        // `VK_ERROR_DEVICE_LOST` instead of hanging.
+        device
+            .wait_for_fences(
+                std::slice::from_ref(&self.in_flight),
+                true, // waitAll
+                u64::MAX,
+            )
             .map_err(|error| PresentError::Failed(format!("vkWaitForFences: {error}")))?;
 
         let present = vk::PresentInfoKHR::default()
             .wait_semaphores(std::slice::from_ref(&self.render_finished))
             .swapchains(std::slice::from_ref(&self.swapchain))
             .image_indices(std::slice::from_ref(&index));
-        match self.swapchain_loader.queue_present(self.queue, &present) {
-            Ok(also_suboptimal) => Ok(if suboptimal || also_suboptimal {
-                Presented::Suboptimal
-            } else {
-                Presented::Frame
-            }),
+        match swapchain_loader.queue_present(self.queue, &present) {
+            Ok(also_suboptimal) => {
+                counters.record_present();
+                Ok(if suboptimal || also_suboptimal {
+                    Presented::Suboptimal
+                } else {
+                    Presented::Frame
+                })
+            }
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(PresentError::OutOfDate),
             Err(error) => Err(PresentError::Failed(format!("vkQueuePresentKHR: {error}"))),
         }
@@ -698,30 +779,39 @@ impl Presenter {
 
 impl Drop for Presenter {
     fn drop(&mut self) {
-        // SAFETY: every handle was created by `new` on this thread and is
-        // destroyed once, here, in reverse creation order. The device is idle
-        // first, so no submission still references them. `swapchain` and the
-        // framebuffers go before the render pass they name, the device before
-        // the surface and instance, and `_entry` (the loader library) is a
-        // field, so it is dropped after this function returns.
+        // SAFETY: every handle here was created by `new` on this thread, and
+        // this is the only place any of them is destroyed — the two `Option`
+        // reads are "did `new` get that far", not a second owner. The device is
+        // idle first, so no submission still references them. The framebuffers
+        // go before the views they name and before the render pass they use;
+        // the device before the surface and the instance; `_entry` is a field,
+        // so the loader library outlives `vkDestroyInstance`. A handle that was
+        // never created is null, which every `destroy_*` call accepts.
         unsafe {
-            let _ = self.device.device_wait_idle();
-            for framebuffer in self.framebuffers.drain(..) {
-                self.device.destroy_framebuffer(framebuffer, None);
+            if let Some(device) = &self.device {
+                let _ = device.device_wait_idle();
+                for framebuffer in self.framebuffers.drain(..) {
+                    device.destroy_framebuffer(framebuffer, None);
+                }
+                for view in self.image_views.drain(..) {
+                    device.destroy_image_view(view, None);
+                }
+                device.destroy_render_pass(self.render_pass, None);
+                device.destroy_semaphore(self.image_available, None);
+                device.destroy_semaphore(self.render_finished, None);
+                device.destroy_fence(self.in_flight, None);
+                device.destroy_command_pool(self.command_pool, None);
+                if let Some(swapchain_loader) = &self.swapchain_loader {
+                    swapchain_loader.destroy_swapchain(self.swapchain, None);
+                }
+                device.destroy_device(None);
             }
-            for view in self.image_views.drain(..) {
-                self.device.destroy_image_view(view, None);
+            if let Some(surface_loader) = &self.surface_loader {
+                surface_loader.destroy_surface(self.surface, None);
             }
-            self.device.destroy_render_pass(self.render_pass, None);
-            self.device.destroy_semaphore(self.image_available, None);
-            self.device.destroy_semaphore(self.render_finished, None);
-            self.device.destroy_fence(self.in_flight, None);
-            self.device.destroy_command_pool(self.command_pool, None);
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
-            self.device.destroy_device(None);
-            self.surface_loader.destroy_surface(self.surface, None);
-            self.instance.destroy_instance(None);
+            if let Some(instance) = &self.instance {
+                instance.destroy_instance(None);
+            }
         }
     }
 }
