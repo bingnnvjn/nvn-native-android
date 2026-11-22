@@ -41,10 +41,11 @@
 //!
 //! The device, surface, swapchain and command objects are created inside the
 //! thread and destroyed on the way out, by [`Presenter`]'s `Drop`. That includes
-//! the failure path: `Presenter::new` stores each object as soon as it exists,
-//! so a `?` half-way through is cleaned up by the same `Drop` the normal exit
-//! uses. A failed attach (both `surfaceCreated` and `surfaceChanged` can start
-//! one) leaks nothing and leaves nothing dangling.
+//! the failure path: `Presenter::new` stores each object as it is created, and
+//! `create_swapchain` destroys the swapchain itself on the three returns that
+//! would otherwise leave it ownerless (`VUID-vkDestroyDevice-device-00378`).
+//! A failed attach (both `surfaceCreated` and `surfaceChanged` can start one)
+//! leaks nothing and leaves nothing dangling.
 
 use core::ffi::{c_void, CStr};
 
@@ -69,12 +70,14 @@ pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long one `vkAcquireNextImageKHR` may block before the loop re-checks
 /// `stop`.
 ///
-/// 20 ms bounds only the acquire wait, so an idle loop re-checks `stop` 50
-/// times a second. It does **not** bound `detach`: `wait_for_fences` and the
-/// `device_wait_idle` in `Drop` have no upper bound, and Vulkan offers no
-/// timeout for either. In the normal path the fence has already been signalled,
-/// so the join is dominated by the 20 ms acquire; a wedged GPU is a case no
-/// Vulkan call can bound, and `detach` inherits that.
+/// 20 ms bounds only the acquire wait: an idle loop re-checks `stop` 50 times a
+/// second. It does **not** bound `detach` — the join can also include one
+/// frame's `vkQueuePresentKHR` (FIFO blocks until the display consumes the
+/// image) and the `device_wait_idle` in `Drop`. `vkWaitForFences` could be
+/// given a timeout, but a `VK_TIMEOUT` there is not a loss signal and the loop
+/// would only re-arm it, so the wait stays unbounded on purpose; the fence
+/// itself signals when the clear completes, which is short. A wedged GPU is a
+/// case no Vulkan call can bound, and `detach` inherits that.
 const ACQUIRE_TIMEOUT_NS: u64 = 20_000_000;
 
 /// The clear colour behind `0xff00ff00`.
