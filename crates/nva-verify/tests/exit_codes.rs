@@ -140,7 +140,6 @@ fn unimplemented_subcommands_exit_3_and_say_why() {
         &["rewrite", "--fixture", "ci/fixtures/rewrite-min"],
         &["shader"],
         &["hle"],
-        &["device"],
     ];
     for args in cases {
         let command = args[0];

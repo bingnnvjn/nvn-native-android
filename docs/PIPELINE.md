@@ -33,9 +33,11 @@
 | `arm64-linux` | ubuntu-24.04-arm | 同上，`+reserve-x18` | gate/stackgate/TLS/x18/FPCR 契约，10 条断言 | `abi-slice-arm64` |
 | `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单；C ABI 布局断言 NDK C11 / C++17（#40） | `abi-slice-apk`、`abi-slice-evidence` |
 | `gate` | ubuntu-24.04 | 不编 | 汇总：任一必需 job 非 success 即红 | 无 |
-| `shell-apk` | ubuntu-24.04 | 产品壳 `shell/android/`，无 Gradle（`aapt2`/`d8`/`apksigner`，#46） | APK 内容扫描（`scan_apk.sh`）、`check_shell_apk.sh`（xmltree 断包名/`minSdk 26`/无 `debuggable` + `llvm-nm -D` 断 `JNI_OnLoad`）、`check_manifest.sh` 的 `product` 模式（证书/ABI/权限/v2+v3） | `shell-apk` |
+| `shell-apk` | ubuntu-24.04 | 产品壳 `shell/android/`，无 Gradle（`aapt2`/`d8`/`apksigner`，#46）；#91 起交叉编译并打包 `libnva_runtime.so` | APK 内容扫描（`scan_apk.sh`）、`check_shell_apk.sh`（xmltree 断包名/`minSdk 26`/无 `debuggable`；`llvm-nm -D` 断 `JNI_OnLoad`、运行时库在包内与 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号，#95）、`check_manifest.sh` 的 `product` 模式（证书/ABI/权限/v2+v3） | `shell-apk` |
 
 **为什么 `gate` 单独存在**：分支保护只认一个必需检查时，多 job 的组合态不好表达；`gate` 折成一个状态位。**新增 job 时必须把它的 id 加进 `gate.needs`**，否则启用后仍然是绿的——这条写在这里，因为它是开关，不是摆设。`shell-apk` 已于 #46 加入 `gate.needs`。
+
+**不新增第六腿**：#91 已在既有 `shell-apk` 腿里交叉编译并打包运行时；#95 补齐「运行时库在包内 + 导出符号」断言与文档。needs 集合本票只核实、不改。
 
 **为什么 `guard` 不依赖任何构建**：红线检查必须最快、最便宜，且 PR 上先红。它 `fetch-depth: 0` 扫**全历史**——#16 的教训是「删掉了但历史里还在」同样致命。
 
@@ -108,6 +110,7 @@ runner 镜像都自带，`guard` 直接调用（无 install step），故按可�
 | `minSdk` | 26 | 同上 |
 | `targetSdk` | 34（spike）；产品今天也是 34（#46 沿用 #37 D15）；36 是**待 L6 定**，不是已决 | 同上 |
 | `native-code` | 只有 `arm64-v8a` | 同上 |
+| 运行时库 | `lib/arm64-v8a/libnva_runtime.so` 在包内，且导出 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号（#95） | `check_shell_apk.sh`（`llvm-nm -D --defined-only`） |
 | 权限 | spike 0 个；产品按 L6 白名单（SAF/FGS），逐条审；今天产品 0 个 | 同上 |
 | `debuggable` | spike `true`；产品**属性不存在**（= 默认 `false`） | `check_manifest.sh` 看 badging；`check_shell_apk.sh` 看 xmltree（#46） |
 | 签名 scheme | v2+v3 两条 `true`（v1 在 minSdk 26 下不存在） | `check_manifest.sh` |
@@ -234,10 +237,11 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
 | `ci/guard/scan_apk.sh` | 条目黑名单、`assets/`、必需条目、体积、绝对路径、`f_<hex>` 符号 | 打印命中条目 |
 | `ci/guard/check_manifest.sh` | 包名/minSdk/targetSdk/ABI/权限/debuggable/签名 scheme/证书指纹 | 打印期望 vs 实际 |
-| `ci/guard/check_shell_apk.sh` | 产品壳（#46）：xmltree 断包名/`minSdk 26`/无 `debuggable`，`llvm-nm -D` 断 `JNI_OnLoad`，断 `lib/` 只有 `arm64-v8a` | 打印 xmltree 与 APK 条目 |
+| `ci/guard/check_shell_apk.sh` | 产品壳（#46）：xmltree 断包名/`minSdk 26`/无 `debuggable`，`llvm-nm -D` 断 `JNI_OnLoad`，断 `lib/` 只有 `arm64-v8a`；#95：断 `libnva_runtime.so` 在包内并断其 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号；#109：xmltree 断 `M0bCheckActivity` 与 `EvidenceProvider` 均 `exported=false`，且 provider `grantUriPermissions=true` | 打印 xmltree 与 APK 条目 |
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
+| `ci/guard/check_private_root.sh` | 私有根守卫（PRIVACY §2）：拒 Windows/可移动挂载、云同步目录、非 ext4/btrfs/xfs/zfs、git 工作树；路径不存在取最近存在父级；git/realpath/findmnt 缺失判错（rc=2） | 打印不合规原因与路径 |
 | `ci/guard/check_style.sh` | 5 个产品 crate 的格式与 lint：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`；spike 树被 workspace 排除，不在门下 | 打印失败的是 fmt 还是 clippy，并附工具输出 |
 | `ci/guard/test_guards.sh` | 对 §7 的门做正反例自测；当前不覆盖 `scan_apk`、`check_manifest`、`check_derived_ledger`、`check_docs`（正例要真 APK 或真账本）；覆盖面见脚本内 `# --- <name> ---` 分节 | 打印失败用例（期望 rc vs 实际） |
 
@@ -290,6 +294,17 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 - 不用 `ubuntu-latest` 漂移：钉 `ubuntu-24.04` / `ubuntu-24.04-arm`。
 - 不做 SLSA attestation（v0 无发布信任需求；做法见 §4.3）。
 - **真机项永不进 CI**：725 第一帧、帧时间 p95、8 MRT ≤28 ms、device validation——lavapipe 跑不了，写进 CI 就是自欺。
+- **M0b 真机载体**：`nva-verify device --scenario m0b [--json <out>] --private-root <path> --m0a-machine-green`
+  在本机执行，证据与台账写私有根（PRIVACY §2），不产出公开 artifact；CI 只跑它的假 adb 合同测试。
+  `--json` 省略时写 stdout。verifier 拒绝 PRIVACY §2 排除的挂载、git 工作树内的私有根，
+  以及私有根之外的 `--json`（均退 `3`）；`apk_sha256` 由 verifier 从设备取回写入证据，
+  与本地 APK 的比对是操作者步骤（GATES §1「取回本地比对」），CLI 不接收 `--apk`。
+- **M0b 无 adb 载体（#109）**：`nva-verify device --from-bundle <zip> --private-root <path> [--json <out>]`
+  是等价路径。应用内验收模式采集 `m0b.json` + `screen.raw` + `nva-shell.log` +
+  `sha256.txt` 的 zip，交回 PC；verifier 复用同一 `verdict_m0b` 与台账写入器，
+  退出码语义不变（无 adb 时这一点尤其重要：判定仍在被测应用之外）。zip 的来源、
+  退出码映射与 PixelCopy/MediaProjection 的取舍见 `docs/DEVICE-LOGS.md` §10。
+  #96 的 adb 路径保留；本证据可满足 #96 的真机 `[H]`。
 
 ## 9. 实测记录（2026-10-31）
 

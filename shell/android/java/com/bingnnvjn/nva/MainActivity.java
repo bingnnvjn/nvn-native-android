@@ -8,25 +8,27 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
-import android.view.Surface;
+import android.view.Gravity;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.widget.Button;
+import android.widget.FrameLayout;
 
 /**
  * Product shell activity: a window, and the app lifecycle behind it (#91).
  *
  * <p>#46 shipped a text card whose whole job was to prove that the APK installs
- * and that {@code JNI_OnLoad} runs. That proof is kept — {@link #shellInfo()} is
- * still called once in {@link #onCreate} — but the content view is now a
+ * and that {@code JNI_OnLoad} runs. That proof is kept — {@link ShellNative#shellInfo()}
+ * is still called once in {@link #onCreate} — but the content view is now a
  * {@link SurfaceView}, and its surface events and the activity lifecycle are
  * forwarded to the runtime through the {@code nva_app_*} exports
  * (docs/ARCHITECTURE.md §3.7, §7.1).
  *
  * <p>No lambdas here: the no-Gradle build puts {@code android.jar} on the javac
  * bootclasspath, which has no {@code LambdaMetafactory}
- * (CODING_STANDARDS.md, "Android / JNI"). Both callbacks below are named inner
- * classes for that reason, not for style.
+ * (CODING_STANDARDS.md, "Android / JNI"). Every callback below is a named inner
+ * class for that reason, not for style.
  *
  * <p>Surface generation. The shell owns the counter (§3.7), and the rule is:
  *
@@ -56,21 +58,16 @@ import android.view.View;
  * that file attached, so a device run can be retrieved without adb. Every line
  * this class logs goes through {@link #note(String)} into the C formatter —
  * Java never opens the file itself. See docs/DEVICE-LOGS.md.
+ *
+ * <p>#109 adds the acceptance entry. A button hands the window to
+ * {@link M0bCheckActivity}; the runtime is torn down here first so the
+ * acceptance activity creates its own object instead of finding a half-alive
+ * one. On the next launch this activity checks for a ready evidence bundle
+ * before touching the runtime: after HOME, reopening the app is how the zip
+ * reaches the share sheet (docs/DEVICE-LOGS.md §10).
  */
 public class MainActivity extends Activity {
     private static final String TAG = "nva-shell";
-
-    /** {@code NVA_OK} from include/nva_abi.h. */
-    private static final int NVA_OK = 0;
-
-    static {
-        // The JNI library links against the runtime, and Android resolves that
-        // dependency at load time; loading it first turns a missing library into
-        // one clear UnsatisfiedLinkError naming the runtime instead of a
-        // confusing failure inside the shell library.
-        System.loadLibrary("nva_runtime");
-        System.loadLibrary("nva_shell_jni");
-    }
 
     /** 0 means "no surface has been attached yet". */
     private int generation;
@@ -79,50 +76,73 @@ public class MainActivity extends Activity {
     private int attachedWidth;
     private int attachedHeight;
 
-    private native String shellInfo();
-
-    private native int appCreate(String dataDir);
-
-    private native int appStart();
-
-    private native int appPause();
-
-    private native int appResume();
-
-    private native int appStop();
-
-    private native int windowAttached(Surface surface, int width, int height, int generation);
-
-    private native int windowDetached();
-
-    private native void appDestroy();
-
-    /** Writes one line through the C side's log formatter (#99). */
-    private native void nativeLog(String line);
+    /**
+     * True once the acceptance activity has been started. Every lifecycle and
+     * surface callback checks it: the runtime now belongs to that activity, and
+     * a late callback here would tear down the wrong object.
+     */
+    private boolean handoff;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+
+        // After HOME the acceptance activity leaves a complete (or partial, if
+        // the process died) evidence set in filesDir. Reopening the app is the
+        // only allowed moment to share it, so this activity shares and leaves
+        // without creating a second runtime object over the same statics.
+        if (M0bCheckActivity.hasPendingEvidence(this)) {
+            // Not our runtime: the acceptance activity left it (or the process
+            // died with it). Tear down whatever is left after the zip is read
+            // so the next launch can create a fresh app.
+            handoff = true;
+            M0bCheckActivity.sharePendingEvidence(this);
+            try {
+                ShellNative.appDestroy();
+            } catch (Throwable t) {
+                Log.i(TAG, "acceptance cleanup failed: " + t);
+            }
+            finish();
+            return;
+        }
 
         // The #46 evidence stays alive: JNI_OnLoad ran and a real JNI call
         // works. It is logged further down, after appCreate, because only then
         // is the log file open and the line recorded there too (#99).
         String info;
         try {
-            info = shellInfo();
+            info = ShellNative.shellInfo();
         } catch (Throwable t) {
             info = "native call failed: " + t;
         }
 
         SurfaceView view = new SurfaceView(this);
         view.getHolder().addCallback(new SurfaceEvents());
-        // Long press is the whole retrieval path (#99): no menu, no button, no
-        // cable. A named inner class, not a lambda — this build has no
+        // Long press is the whole retrieval path (#99): no menu, no cable. A
+        // named inner class, not a lambda — this build has no
         // LambdaMetafactory (see the class comment). Setting the listener also
         // makes the view long-clickable, which is what lets onTouchEvent take
         // the DOWN without any other click handling here.
         view.setOnLongClickListener(new ShareLog());
-        setContentView(view);
+
+        // The acceptance button sits in a corner above the surface. SurfaceView
+        // draws in a separate layer behind the window, so ordinary views in
+        // this same FrameLayout draw on top of it.
+        FrameLayout root = new FrameLayout(this);
+        root.addView(
+                view,
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT));
+        Button acceptance = new Button(this);
+        acceptance.setText("M0b 验收");
+        FrameLayout.LayoutParams buttonParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        buttonParams.gravity = Gravity.TOP | Gravity.END;
+        root.addView(acceptance, buttonParams);
+        acceptance.setOnClickListener(new StartAcceptance());
+        setContentView(root);
 
         // After the view is in place, so a surface event can never arrive before
         // the runtime has an object to hand it to. This call also opens the log
@@ -131,7 +151,7 @@ public class MainActivity extends Activity {
         // A refusal is recorded once, by the JNI layer, next to the call that
         // failed: logging it here as well would put two differently-worded
         // lines on one event, and the ticket asks for one line per entry.
-        appCreate(getFilesDir().getAbsolutePath());
+        ShellNative.appCreate(getFilesDir().getAbsolutePath());
         note(info + " on " + Build.MODEL + " / Android " + Build.VERSION.RELEASE);
     }
 
@@ -139,32 +159,42 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         // Refusals are recorded by the JNI layer (see onCreate).
-        appStart();
+        if (!handoff) {
+            ShellNative.appStart();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        appResume();
+        if (!handoff) {
+            ShellNative.appResume();
+        }
     }
 
     @Override
     protected void onPause() {
         // Before super: the runtime hears about the pause while the surface is
         // still valid, which is the order #93's present loop needs.
-        appPause();
+        if (!handoff) {
+            ShellNative.appPause();
+        }
         super.onPause();
     }
 
     @Override
     protected void onStop() {
-        appStop();
+        if (!handoff) {
+            ShellNative.appStop();
+        }
         super.onStop();
     }
 
     @Override
     protected void onDestroy() {
-        appDestroy();
+        if (!handoff) {
+            ShellNative.appDestroy();
+        }
         super.onDestroy();
     }
 
@@ -179,7 +209,7 @@ public class MainActivity extends Activity {
      */
     private void note(String line) {
         try {
-            nativeLog(line);
+            ShellNative.nativeLog(line);
         } catch (Throwable t) {
             Log.i(TAG, line);
         }
@@ -195,12 +225,16 @@ public class MainActivity extends Activity {
      * changed as a rotation.
      */
     private void attach(SurfaceHolder holder, int width, int height) {
+        if (handoff) {
+            return;
+        }
         if (width <= 0 || height <= 0) {
             note("surface has no size yet: " + width + "x" + height);
             return;
         }
         // See onCreate: the JNI layer owns the record for a refused call.
-        if (windowAttached(holder.getSurface(), width, height, generation) == NVA_OK) {
+        if (ShellNative.windowAttached(holder.getSurface(), width, height, generation)
+                == ShellNative.NVA_OK) {
             attachedWidth = width;
             attachedHeight = height;
         }
@@ -214,6 +248,9 @@ public class MainActivity extends Activity {
     private final class SurfaceEvents implements SurfaceHolder.Callback {
         @Override
         public void surfaceCreated(SurfaceHolder holder) {
+            if (handoff) {
+                return;
+            }
             generation++;
             attachedWidth = 0;
             attachedHeight = 0;
@@ -223,6 +260,9 @@ public class MainActivity extends Activity {
 
         @Override
         public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            if (handoff) {
+                return;
+            }
             if (width <= 0 || height <= 0) {
                 note("surface changed with no size yet: " + width + "x" + height);
                 return;
@@ -239,10 +279,13 @@ public class MainActivity extends Activity {
 
         @Override
         public void surfaceDestroyed(SurfaceHolder holder) {
+            if (handoff) {
+                return;
+            }
             if (!hasAttachedWindow()) {
                 return;
             }
-            windowDetached();
+            ShellNative.windowDetached();
             attachedWidth = 0;
             attachedHeight = 0;
         }
@@ -283,6 +326,40 @@ public class MainActivity extends Activity {
             }
             // Consumed either way: nothing else is bound to a long press here.
             return true;
+        }
+    }
+
+    /**
+     * The "M0b 验收" button (#109): tear the runtime down, then hand the screen
+     * to {@link M0bCheckActivity}.
+     *
+     * <p>The teardown is explicit, not left to {@link #onDestroy}. Android may
+     * create the new activity before destroying this one, and the JNI layer
+     * holds one global app; if the acceptance activity called {@code appCreate}
+     * first it would be refused as "already created". Destroying here also
+     * closes the log, so the acceptance run gets its own {@code === run}
+     * header — the PC verifier slices to that last run.
+     */
+    private final class StartAcceptance implements View.OnClickListener {
+        @Override
+        public void onClick(View view) {
+            if (handoff) {
+                return;
+            }
+            handoff = true;
+            try {
+                ShellNative.appDestroy();
+            } catch (Throwable t) {
+                note("acceptance handoff: " + t);
+            }
+            try {
+                startActivity(new Intent(MainActivity.this, M0bCheckActivity.class));
+            } catch (Throwable t) {
+                handoff = false;
+                note("acceptance start failed: " + t);
+                return;
+            }
+            finish();
         }
     }
 }

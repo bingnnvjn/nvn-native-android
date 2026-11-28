@@ -376,10 +376,29 @@ expect_rc 0 python3 ci/guard/check_doc_refs.py --root "$DUP_REPO"
 # It must fail closed: a missing APK, or a missing Android toolchain, has to
 # exit 2 instead of silently passing. The positive path needs a real APK, so it
 # is exercised by the shell-apk job (and the #46 counter-proof run), not here.
+# #95's runtime-entry and export branches (pass and fail) are covered by the
+# shell-apk job as well; they need both `.so` files, aapt2 and the NDK
+# `llvm-nm`. The two cases below only prove the script fails closed before it
+# reaches those branches (the APK is missing, or aapt2 is absent).
 expect_rc 2 bash ci/guard/check_shell_apk.sh "$TMP/no-such.apk"
 printf 'not an apk\n' >"$TMP/fake.apk"
 expect_rc 2 env ANDROID_HOME=/nonexistent SHELL_NDK_BIN=/nonexistent \
   bash ci/guard/check_shell_apk.sh "$TMP/fake.apk"
+
+# --- check_private_root.sh (#96) -------------------------------------------
+# Private evidence must not live on a Windows mount, in a cloud directory, or
+# inside a git work tree; a plain ext4 temp dir is the positive case. A path
+# that does not exist yet uses its nearest existing parent.
+expect_rc 1 bash ci/guard/check_private_root.sh /mnt/x
+expect_rc 1 bash ci/guard/check_private_root.sh /media/x
+expect_rc 1 bash ci/guard/check_private_root.sh "$TMP/OneDrive/private"
+expect_rc 0 bash ci/guard/check_private_root.sh "$TMP"
+expect_rc 0 bash ci/guard/check_private_root.sh "$TMP/not-created-yet"
+expect_rc 1 bash ci/guard/check_private_root.sh "$ROOT"
+expect_rc 2 bash ci/guard/check_private_root.sh
+expect_rc 2 bash ci/guard/check_private_root.sh one two
+# A missing git is a broken check (2), not a silent pass.
+expect_rc 2 env NVA_GIT=/nonexistent/git bash ci/guard/check_private_root.sh "$TMP"
 
 # --- check_style.sh (#53) --------------------------------------------------
 # The gate must be able to fail. guard has no Rust toolchain, so a stub cargo

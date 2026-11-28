@@ -78,6 +78,22 @@ if [ -z "$BUILD_DATE" ]; then
 fi
 VERSION_NAME="$VERSION_MINOR ($BUILD_DATE)"
 VERSION_CODE=$(printf '%s' "$BUILD_DATE" | tr -d '-')
+# The commit the acceptance evidence names (#109). Read at build time so the
+# phone cannot claim a tree it was not built from; the verifier records it in
+# the private ledger. A dirty tree is refused outright: stamping a clean HEAD
+# onto a package built from uncommitted bytes would make the evidence name the
+# wrong code, which is worse than not building. A build outside a git checkout
+# says `unknown`.
+DIRTY=$(git -C "$REPO" status --porcelain 2>/dev/null || true)
+if [ -n "$DIRTY" ]; then
+    echo "error: working tree is dirty; refusing to embed a commit that does not name this tree" >&2
+    printf '%s\n' "$DIRTY" >&2
+    exit 1
+fi
+COMMIT=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)
+if [ -z "$COMMIT" ]; then
+    COMMIT=unknown
+fi
 
 BUILD="$OUT/build"
 APKROOT="$BUILD/apkroot"
@@ -98,6 +114,7 @@ echo "==> native library (version $VERSION_NAME, code $VERSION_CODE)"
 "$CC" -std=c11 -shared -fPIC -O2 -fno-stack-protector -ffixed-x18 \
     -Wall -Wextra -Werror \
     -DSHELL_VERSION="\"$VERSION_NAME\"" \
+    -DSHELL_COMMIT="\"$COMMIT\"" \
     -Wl,-soname,libnva_shell_jni.so \
     -I "$REPO/include" \
     android/jni/nva_shell_jni.c \
@@ -107,14 +124,19 @@ echo "==> native library (version $VERSION_NAME, code $VERSION_CODE)"
 cp "$RUNTIME_SO" "$OUT/lib/arm64-v8a/"
 
 echo "==> Java"
-# Both sources listed, not a glob: javac's output set is what d8 packages, and
+# Every source listed, not a glob: javac's output set is what d8 packages, and
 # a class that silently does not get compiled would only fail on a phone.
 # LogProvider (#99) is the share sheet's read end of the device log.
+# ShellNative (#109) holds the static JNI entry points both activities use;
+# M0bCheckActivity and EvidenceProvider are the acceptance screen and its zip.
 javac -source 8 -target 8 -Xlint:-options \
     -bootclasspath "$PLATFORM/android.jar" \
     -d "$BUILD/classes" \
     android/java/com/bingnnvjn/nva/MainActivity.java \
-    android/java/com/bingnnvjn/nva/LogProvider.java
+    android/java/com/bingnnvjn/nva/LogProvider.java \
+    android/java/com/bingnnvjn/nva/ShellNative.java \
+    android/java/com/bingnnvjn/nva/M0bCheckActivity.java \
+    android/java/com/bingnnvjn/nva/EvidenceProvider.java
 
 echo "==> dex"
 mapfile -t CLASS_FILES < <(find "$BUILD/classes" -name '*.class' | sort)

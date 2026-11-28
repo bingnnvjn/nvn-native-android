@@ -1,12 +1,12 @@
 //! `nva-verify` CLI (`docs/ARCHITECTURE.md` §3.8).
 //!
-//! #42 implements `loadplan`; #44 implements `smoke`. `rewrite` / `shader` /
-//! `hle` / `device` are known but not implemented yet: they answer `3` (oracle
-//! unavailable) and say why.
+//! #42 implements `loadplan`; #44 implements `smoke`; #96 implements `device`.
+//! `rewrite` / `shader` / `hle` are known but not implemented yet: they answer
+//! `3` (oracle unavailable) and say why.
 
 use std::path::Path;
 
-use nva_verify::{loadplan, smoke};
+use nva_verify::{device, loadplan, smoke};
 
 /// `3` oracle unavailable (#37 D8, #37 D12).
 const EXIT_ORACLE_UNAVAILABLE: i32 = 3;
@@ -24,6 +24,7 @@ fn run() -> i32 {
             run_loadplan(fixture)
         }
         [command, rest @ ..] if command.as_str() == "smoke" => run_smoke(rest),
+        [command, rest @ ..] if command.as_str() == device::COMMAND => device::run_cli(rest),
         [command, ..] if is_unimplemented(command) => {
             eprintln!(
                 "{command}: not implemented yet, so the oracle is unavailable \
@@ -34,17 +35,25 @@ fn run() -> i32 {
         _ => {
             eprintln!("usage: nva-verify loadplan --fixture <pack-dir>");
             eprintln!("       nva-verify smoke [--headless] [--frames N] [--json [FILE]]");
+            eprintln!(
+                "       nva-verify device --scenario m0b [--json <out>] \
+                 --private-root <path> --m0a-machine-green   (--json omitted: stdout)"
+            );
+            eprintln!(
+                "       nva-verify device --from-bundle <zip> [--json <out>] \
+                 --private-root <path>                        (offline acceptance package)"
+            );
             loadplan::EXIT_MISMATCH
         }
     }
 }
 
-/// The four subcommands whose implementation is still pending (#37 D12).
+/// The three subcommands whose implementation is still pending (#37 D12).
 ///
 /// They are *known but unavailable*, which is exit `3`, not the usage error `2`
 /// and never the success `0`.
 fn is_unimplemented(command: &str) -> bool {
-    matches!(command, "rewrite" | "shader" | "hle" | "device")
+    matches!(command, "rewrite" | "shader" | "hle")
 }
 
 fn run_loadplan(fixture: &str) -> i32 {

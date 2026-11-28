@@ -1,5 +1,11 @@
 /*
- * JNI library for the product shell (#46, #91).
+ * JNI library for the product shell (#46, #91, #109).
+ *
+ * #109 moves the declared methods to `ShellNative` so `MainActivity` and
+ * `M0bCheckActivity` share one JNI surface over the same statics, and adds the
+ * acceptance read-outs (`shellCommit`, `shellStatsJson`). Neither is a new C ABI
+ * export: they are JNI calls into the runtime's existing query and a
+ * build-time string.
  *
  * #46 made this the smallest thing that satisfies docs/GATES.md §3: the library
  * exports JNI_OnLoad, and the activity makes one real JNI call so the export is
@@ -11,10 +17,11 @@
  * ANativeWindow reference is acquired and released here. Still no Vulkan, no
  * guest, no audio in this library.
  *
- * #93 adds the read side of the stats snapshot: a successful attach and a
- * successful detach each end with one `attach stats …` / `detach stats …` line
- * (`shell_log_stats`). The counters are produced by the runtime's render
- * thread, which lives in `libnva_runtime.so` — this file only asks for them.
+ * #94 moves the snapshot into the runtime: a successful attach and a
+ * successful detach each say one single-line JSON object under the `nva-stats`
+ * tag. `shell_platform_log` forwards the runtime's tag to logcat, so
+ * `logcat -d -s nva-stats` selects exactly those lines; the file keeps the
+ * same bytes as before (#99).
  *
  * ## Who holds the window reference
  *
@@ -37,7 +44,7 @@
  * Every function here runs on the Android main thread: activity callbacks and
  * SurfaceHolder callbacks are both delivered there, so the statics below need
  * no lock. The runtime keeps its own state behind a mutex, and #93's render
- * thread never touches it — it is handed an owned job plus two counters, and
+ * thread never touches it — it is handed an owned job plus three counters, and
  * reports back through a condition variable the attach thread waits on. That is
  * also why the render thread never calls `nva_platform.log`: the log file has
  * one writer, and it is this thread.
@@ -99,6 +106,16 @@
 #endif
 
 /*
+ * The commit the acceptance evidence names (#109). `build_apk.sh` passes
+ * `git rev-parse HEAD`; a build outside that script says `unknown`, which the
+ * PC verifier records as-is. This is a build-time string, not a runtime git
+ * lookup — the phone has no checkout to ask.
+ */
+#ifndef SHELL_COMMIT
+#define SHELL_COMMIT "unknown"
+#endif
+
+/*
  * One line: `HH:MM:SS.mmm ` plus the message. 320 bytes holds the longest line
  * here (the device line from Java) with room to spare; anything longer is cut
  * rather than wrapped, because a wrapped line is two lines that a reader
@@ -126,6 +143,8 @@ static unsigned long g_log_bytes;
 
 /* Declared ahead of the writer so gcc checks every call site's format string. */
 static void shell_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void shell_log_tagged(const char *tag, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
 static void shell_rotate(void);
 static void shell_log_close(void);
 
@@ -269,13 +288,17 @@ static void shell_rotate(void)
  * forces a re-measure — it is never half a line waiting for the next one to
  * complete it. Both exits receive these exact bytes, which is what keeps the
  * file and logcat comparable.
+ *
+ * `tag` is the logcat tag only (#94): the runtime names its snapshots
+ * `nva-stats`, so `logcat -s nva-stats` can select them. The file has no tag
+ * column, so its bytes are unchanged.
  */
-static void shell_emit(char *line, size_t len)
+static void shell_emit(char *line, size_t len, const char *tag)
 {
     if (len == 0) {
         return;
     }
-    __android_log_print(ANDROID_LOG_INFO, SHELL_LOG_TAG, "%s", line);
+    __android_log_print(ANDROID_LOG_INFO, tag != NULL ? tag : SHELL_LOG_TAG, "%s", line);
 
     if (g_log_file == NULL) {
         return;
@@ -301,7 +324,11 @@ static void shell_emit(char *line, size_t len)
     }
 }
 
-static void shell_log(const char *fmt, ...)
+/*
+ * Formats one line and emits it under `tag`. Both wrappers below share this
+ * body, so the file gets the same bytes whichever tag logcat sees.
+ */
+static void shell_log_v(const char *tag, const char *fmt, va_list ap)
 {
     char line[SHELL_LOG_LINE];
     size_t used = shell_format_clock(line, sizeof line);
@@ -311,14 +338,29 @@ static void shell_log(const char *fmt, ...)
     /* Two bytes are kept back for the newline the writer appends and the
      * terminator, so even a truncated message still fits. */
     size_t room = sizeof line - used - 2;
-    va_list ap;
-    va_start(ap, fmt);
     int n = vsnprintf(line + used, room + 1, fmt, ap);
-    va_end(ap);
     if (n < 0) {
         return;
     }
-    shell_emit(line, used + ((size_t)n < room ? (size_t)n : room));
+    shell_emit(line, used + ((size_t)n < room ? (size_t)n : room), tag);
+}
+
+/* The shell's own events: logcat tag `nva-shell`. */
+static void shell_log(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    shell_log_v(SHELL_LOG_TAG, fmt, ap);
+    va_end(ap);
+}
+
+/* The runtime's lines: logcat tag as the runtime named it (#94). */
+static void shell_log_tagged(const char *tag, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    shell_log_v(tag, fmt, ap);
+    va_end(ap);
 }
 
 /*
@@ -344,7 +386,7 @@ static void shell_log_text(const char *text)
         n++;
     }
     line[used + n] = '\0';
-    shell_emit(line, used + n);
+    shell_emit(line, used + n, SHELL_LOG_TAG);
 }
 
 /*
@@ -380,8 +422,9 @@ static const char *shell_level_name(uint32_t level)
 static void shell_platform_log(void *user, uint32_t level, const char *tag, const char *msg)
 {
     (void)user;
-    shell_log("[rt] %s %s: %s", shell_level_name(level), tag != NULL ? tag : "?",
-              msg != NULL ? msg : "(null)");
+    shell_log_tagged(tag != NULL ? tag : SHELL_LOG_TAG, "[rt] %s %s: %s",
+                     shell_level_name(level), tag != NULL ? tag : "?",
+                     msg != NULL ? msg : "(null)");
 }
 
 /*
@@ -396,42 +439,6 @@ static const nva_platform g_platform = {
     .version = NVA_PLATFORM_VERSION,
     .log = shell_platform_log,
 };
-
-/*
- * One stats snapshot as one line (#93).
- *
- * `when` is `attach` or `detach`: the same fields are read at the two moments
- * the ticket names, and the word is what tells the two lines apart when the
- * file is read back. `presents` is the field the acceptance check looks at — at
- * attach it must be at least 1, and after a detach it must be the value the run
- * reached, not a larger one.
- *
- * The struct is zeroed and then given its own `size` / `version`: the runtime
- * writes every field today, but a caller that handed it a half-initialised
- * struct would be reading its own memory back as a count on any field a later
- * version appends.
- *
- * Called on the main thread only, like everything else here: `attach` has
- * already waited for the first frame, so this line is a snapshot, not a poll.
- */
-static void shell_log_stats(const char *when)
-{
-    if (g_app == NULL) {
-        return;
-    }
-    nva_stats stats;
-    memset(&stats, 0, sizeof stats);
-    stats.size = (uint32_t)sizeof(stats);
-    stats.version = NVA_STATS_VERSION;
-    nva_status status = nva_app_get_stats(g_app, &stats);
-    if (status != NVA_OK) {
-        shell_log("%s stats failed: status=%u", when, (unsigned)status);
-        return;
-    }
-    shell_log("%s stats presents=%u generation=%u submits=%llu", when,
-              (unsigned)stats.presents, (unsigned)stats.surface_generation,
-              (unsigned long long)stats.submits);
-}
 
 /*
  * Open the file and write the run header. Called with the directory the Java
@@ -483,7 +490,7 @@ static void shell_log_open(const char *dir)
     char header[SHELL_LOG_LINE];
     int h = snprintf(header, sizeof header - 1, "=== run %d %s ===", run, stamp);
     if (h > 0 && (size_t)h < sizeof header - 1) {
-        shell_emit(header, (size_t)h);
+        shell_emit(header, (size_t)h, SHELL_LOG_TAG);
     }
 }
 
@@ -517,19 +524,70 @@ JNI_OnLoad(JavaVM *vm, void *reserved)
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_bingnnvjn_nva_MainActivity_shellInfo(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_shellInfo(JNIEnv *env, jclass clazz)
 {
-    (void)thiz;
+    (void)clazz;
     /* No status to report: the entry cannot fail. It still logs one line, so
      * every entry point appears in the file with the same shape. */
     shell_log("shellInfo status=%u", (unsigned)NVA_OK);
     return (*env)->NewStringUTF(env, "NVA shell " SHELL_VERSION " (JNI_OnLoad ran)");
 }
 
-JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appCreate(JNIEnv *env, jobject thiz, jstring data_dir)
+/*
+ * The build commit (#109). Like `shellInfo`, it cannot fail; the value is a
+ * compile-time string.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_bingnnvjn_nva_ShellNative_shellCommit(JNIEnv *env, jclass clazz)
 {
-    (void)thiz;
+    (void)clazz;
+    return (*env)->NewStringUTF(env, SHELL_COMMIT);
+}
+
+/*
+ * The runtime's counters as one single-line JSON object (#109).
+ *
+ * `nva_app_get_stats` is a query, not a new seam: the acceptance activity uses
+ * it to decide when the first frame has presented and to record the attach
+ * snapshot. It is not an event, so nothing is written to the log here.
+ *
+ * Returns NULL when there is no runtime object or the read is refused; Java
+ * treats that as "no snapshot yet" and keeps waiting. `attached` is this
+ * file's own window reference, because `nva_stats` has no such field.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_bingnnvjn_nva_ShellNative_shellStatsJson(JNIEnv *env, jclass clazz)
+{
+    (void)clazz;
+    if (g_app == NULL) {
+        return NULL;
+    }
+    nva_stats stats;
+    memset(&stats, 0, sizeof stats);
+    stats.size = (uint32_t)sizeof stats;
+    stats.version = NVA_STATS_VERSION;
+    nva_status status = nva_app_get_stats(g_app, &stats);
+    if (status != NVA_OK) {
+        shell_log("stats read failed: status=%u", (unsigned)status);
+        return NULL;
+    }
+    char json[SHELL_LOG_LINE];
+    int n = snprintf(json, sizeof json,
+                     "{\"presents\":%u,\"surface_generation\":%u,\"attached\":%s,"
+                     "\"submits\":%llu}",
+                     (unsigned)stats.presents, (unsigned)stats.surface_generation,
+                     g_window != NULL ? "true" : "false",
+                     (unsigned long long)stats.submits);
+    if (n <= 0 || (size_t)n >= sizeof json) {
+        return NULL;
+    }
+    return (*env)->NewStringUTF(env, json);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_bingnnvjn_nva_ShellNative_appCreate(JNIEnv *env, jclass clazz, jstring data_dir)
+{
+    (void)clazz;
     if (g_app != NULL) {
         shell_log("app already created status=%u", (unsigned)NVA_ERR_INVALID_ARGUMENT);
         return NVA_ERR_INVALID_ARGUMENT;
@@ -613,34 +671,34 @@ static jint lifecycle_step(const char *step, const char *event, nva_status (*cal
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appStart(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appStart(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("start", "started", nva_app_start);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appPause(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appPause(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("pause", "paused", nva_app_pause);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appResume(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appResume(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("resume", "resumed", nva_app_resume);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appStop(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appStop(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("stop", "stopped", nva_app_stop);
 }
 
@@ -650,10 +708,10 @@ Java_com_bingnnvjn_nva_MainActivity_appStop(JNIEnv *env, jobject thiz)
  * what it is told, and a 0-shaped window would be #93's problem to detect.
  */
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_windowAttached(JNIEnv *env, jobject thiz, jobject surface,
+Java_com_bingnnvjn_nva_ShellNative_windowAttached(JNIEnv *env, jclass clazz, jobject surface,
                                                    jint width, jint height, jint generation)
 {
-    (void)thiz;
+    (void)clazz;
     if (g_app == NULL) {
         shell_log("surface attached without an app status=%u", (unsigned)NVA_ERR_INVALID_ARGUMENT);
         return NVA_ERR_INVALID_ARGUMENT;
@@ -693,19 +751,17 @@ Java_com_bingnnvjn_nva_MainActivity_windowAttached(JNIEnv *env, jobject thiz, jo
     g_generation = (uint32_t)generation;
     shell_log("surface attached (generation=%d) %dx%d status=%u", (int)generation, (int)width,
               (int)height, (unsigned)NVA_OK);
-    /* #93: the runtime started its render thread inside the attach and waited
-     * up to a second for the first frame, so this snapshot is normally
-     * `presents >= 1`. A 0 here is the evidence for a failed or late first
-     * frame, not a reason to fail the attach. */
-    shell_log_stats("attach");
+    /* #94: the runtime said its attach snapshot from inside the call above
+     * (line tag `nva-stats`), so it precedes this shell event line in the
+     * file. No second read is needed here. */
     return (jint)NVA_OK;
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_windowDetached(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_windowDetached(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     if (g_app == NULL) {
         shell_log("detach without an app status=%u", (unsigned)NVA_ERR_INVALID_ARGUMENT);
         return NVA_ERR_INVALID_ARGUMENT;
@@ -729,10 +785,10 @@ Java_com_bingnnvjn_nva_MainActivity_windowDetached(JNIEnv *env, jobject thiz)
         g_window = NULL;
     }
     shell_log("detached (generation=%u) status=%u", (unsigned)g_generation, (unsigned)NVA_OK);
-    /* #93: detach stopped and joined the render thread, so `presents` here is
-     * final for this run. On HOME the pair of these two lines is the evidence
-     * that the loop stopped instead of erroring out. */
-    shell_log_stats("detach");
+    /* #94: detach stopped and joined the render thread before it returned, so
+     * the snapshot and the `detached_submit` signal it said from inside the
+     * call are final for this run. On HOME that pair is the evidence the loop
+     * stopped instead of erroring out. */
     g_generation = 0;
     return (jint)NVA_OK;
 }
@@ -746,10 +802,10 @@ Java_com_bingnnvjn_nva_MainActivity_windowDetached(JNIEnv *env, jobject thiz)
  * same process reopens with a fresh header.
  */
 JNIEXPORT void JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appDestroy(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appDestroy(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     if (g_app == NULL) {
         /* Not a record line: nothing was destroyed. Worth saying anyway, since
          * it means `appCreate` never succeeded. */
@@ -779,9 +835,9 @@ Java_com_bingnnvjn_nva_MainActivity_appDestroy(JNIEnv *env, jobject thiz)
  * it as data and keeps it on one line.
  */
 JNIEXPORT void JNICALL
-Java_com_bingnnvjn_nva_MainActivity_nativeLog(JNIEnv *env, jobject thiz, jstring text)
+Java_com_bingnnvjn_nva_ShellNative_nativeLog(JNIEnv *env, jclass clazz, jstring text)
 {
-    (void)thiz;
+    (void)clazz;
     if (text == NULL) {
         return;
     }
