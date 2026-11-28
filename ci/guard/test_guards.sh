@@ -385,6 +385,19 @@ printf 'not an apk\n' >"$TMP/fake.apk"
 expect_rc 2 env ANDROID_HOME=/nonexistent SHELL_NDK_BIN=/nonexistent \
   bash ci/guard/check_shell_apk.sh "$TMP/fake.apk"
 
+# --- check_private_root.sh (#96) -------------------------------------------
+# Private evidence must not live on a Windows mount, in a cloud directory, or
+# inside a git work tree; a plain ext4 temp dir is the positive case. A path
+# that does not exist yet uses its nearest existing parent.
+expect_rc 1 bash ci/guard/check_private_root.sh /mnt/x
+expect_rc 1 bash ci/guard/check_private_root.sh /media/x
+expect_rc 1 bash ci/guard/check_private_root.sh "$TMP/OneDrive/private"
+expect_rc 0 bash ci/guard/check_private_root.sh "$TMP"
+expect_rc 0 bash ci/guard/check_private_root.sh "$TMP/not-created-yet"
+expect_rc 1 bash ci/guard/check_private_root.sh "$ROOT"
+expect_rc 2 bash ci/guard/check_private_root.sh
+expect_rc 2 bash ci/guard/check_private_root.sh one two
+
 # --- check_style.sh (#53) --------------------------------------------------
 # The gate must be able to fail. guard has no Rust toolchain, so a stub cargo
 # stands in through NVA_CARGO -- same injection idea as check_workspace.sh.

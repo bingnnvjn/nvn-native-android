@@ -247,3 +247,20 @@ adb logcat -d -s nva-stats          # run 之后只取快照
 合法 / 缺字段 / 乱序 / 无 `{` 四种形状是 `src/statslog.rs` 的单测；含 `{` 的坏 JSON、类型不符
 与信号跳过在 `tests/statslog.rs` 集成测试。都不依赖真机。
 
+**`device --scenario m0b` 如何消费快照（#96）**
+
+- **attach 快照**（`attached:true`）：`surface_generation`、`presents` 与
+  `validation_available` / `validation_errors` 取自这里；像素另从
+  `adb exec-out screencap` 的原始流取窗口中心（12 / 16 B 头都接受，不做 PNG 解码）。
+- **detach 快照**（`attached:false`）：`presents` 是 stop 置位、渲染线程 join 之后的
+  冻结值，**包含 attach 到 HOME 之间正常渲染的帧**，所以不能用它与 attach 快照的差值
+  判失败。POST-HOME 是否还在提交由下一条信号判定；进程消失另记 `crashed`（→ `2`）。
+- **`detached_submit` 信号**：`count` 是 stop 置位后仍进入 present 的次数。信号缺席即
+  `count = 0`，也就是「HOME 后 `presents` 不增」；有信号则第 4 条判据与 HOME 反证
+  同时失败（退出码 `2`），不从快照数推断。信号行仍由解析器跳过，不进入快照序列。
+- **跨 run 切片**：`logcat -c` 之后取到的流通常只有一个 run；若混入 `=== run` 头
+  （例如直接读日志文件），先按最后一个 run 头切片再交给 `parse_stream`，否则新 run
+  的计数归零会被判 `OutOfOrder`。
+- **不前置门**：`validation_available` / `validation_errors` 只写进证据 JSON，
+  不参与 M0b 判定；产品包恒 `0` 既不是绿的理由，也不是红的理由。
+
