@@ -56,7 +56,7 @@
 
 版本口径：**布局层兼容**（旧二进制读前 56 B、按 `version` 分支仍成立），**运行时只认当前版本**——`nva_gfx_get_stats` 对 `version != 2` 返回 `NVA_ERR_INVALID_ARGUMENT`，v1 调用方被硬拒。这不是缺陷，是 #37 的裁定（docs/ARCHITECTURE.md §7.4）。
 
-九个字段的生产值由 #93（首帧上屏）与 #96 填；在那之前运行时把它们写 0，调用方不会读回未初始化内存。
+九个字段的生产值由 #93（首帧上屏，填 `presents` 与 `surface_generation` 两个）与后续里程碑的票（#96 等）填；在那之前运行时把它们写 0，调用方不会读回未初始化内存。
 
 | 字段 | 用途 | 门 |
 |---|---|---|
@@ -207,7 +207,7 @@ adb shell getprop ro.fpslock   # 无此属性；fpslock 由 App 自报 + 行为�
 
 - 输入三段：确认键（`M2-0`）→ overlay 摇杆/ABXY（`M2b`）→ 手柄（M3 之后）。
 - pack 上机：M1–M3 用 `nva-pack install`（adb，dev-only）；SAF 在 `M3b`。
-- `nva_stats` 追加：§2.4 已在 #90 落地（96 B / `NVA_STATS_VERSION = 2`，账本 86/11/11）；九个计数目前恒 0，由 #93/#96 填写。
+- `nva_stats` 追加：§2.4 已在 #90 落地（96 B / `NVA_STATS_VERSION = 2`，账本 86/11/11）；`presents` / `surface_generation` 由 #93 填写；其余七个计数恒 0，由后续里程碑的票（#96 等）填写。
 - **#31**：不前置任何门；每门记 `validation_available` 与 `validation_errors`；到 M2 末未关则按 #31 路径 3 收口，附失败命令、loader 版本、logcat 哈希。
 - 证据：`PIPELINE.md:49` 的公开 evidence artifact 对产品门退役，只在 spike 保留；#33 定私有根路径。
 

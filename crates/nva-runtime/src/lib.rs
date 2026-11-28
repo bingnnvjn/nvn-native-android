@@ -3,6 +3,8 @@
 //! The product C ABI export surface (`nva_app_` / `nva_gfx_` / `nva_host_`)
 //! is split by seam: this module holds the gfx and host sides plus the NVN
 //! entry points, and `app.rs` holds the shell lifecycle and the window (#91).
+//! `window.rs` (#93, platform build only) is the presentation side of that
+//! window: one surface, one swapchain, one clear frame per present.
 //! Ticket #44 adds exactly what the PC smoke path needs: create a gfx object,
 //! drive one offscreen frame through the NVN entry points, wait for the fence,
 //! and hand the result to `nva-verify`.
@@ -28,6 +30,10 @@ mod app;
 pub mod debug_filter;
 pub mod verify;
 mod vk;
+/// The platform presentation engine (#93). Declared here, not in `app.rs`, so
+/// `app` stays a leaf module; `app` is still the one that starts and stops it.
+#[cfg(target_os = "android")]
+mod window;
 
 use verify::nva_verify_state;
 use vk::{CreateError, Vk, WaitError};

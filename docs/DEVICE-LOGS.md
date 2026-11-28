@@ -147,8 +147,8 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
 
   | ABI 宏 | 数值 | 文件里的词 | 什么时候出现 |
   |---|---|---|---|
-  | `NVA_LOG_ERROR` | 0 | `error` | 拒绝：迁移不合法、attach 被拒、代差不匹配、状态锁中毒 |
-  | `NVA_LOG_WARN` | 1 | `warn` | 本票不产生 |
+  | `NVA_LOG_ERROR` | 0 | `error` | 拒绝：迁移不合法、attach 被拒、代差不匹配、状态锁中毒；引擎拒绝：渲染线程起不来、首帧 setup 失败 |
+  | `NVA_LOG_WARN` | 1 | `warn` | 引擎备注：`suboptimal`、swapchain out-of-date、首帧 1 秒未就绪、渲染循环停止的原因 |
   | `NVA_LOG_INFO` | 2 | `info` | 迁移成功：`start` / `resume` / `pause` / `stop` / `attach` / `detach` / `destroy` |
   | `NVA_LOG_DEBUG` | 3 | `debug` | 本票不产生 |
 
@@ -159,11 +159,22 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
   要按等级筛选，看文件，别用 logcat 的优先级开关。
 - **一次迁移一行。** 冷启动是 `start`、`resume`、`attach generation=N WxH` 三条，各恰好一次。
   拒绝是一条 `error`，形如 `start refused: no transition from started`——带上被拒的操作和它当时
-  所处的状态；`detach` 的代差不匹配会把两个代差都写出来。
+  所处的状态；`detach` 的代差不匹配会把两个代差都写出来。attach 与 detach 成功后壳再各追加一行
+  `<attach|detach> stats …`（见本节末尾），那两行是壳读快照，不是运行时的事件。
 - **运行时的词是 ABI 调用名，不是 §3 的壳事件词。** `[rt] ... destroy` 与壳的
   `destroyed status=0` 成对出现，是因为运行时说的是它自己被调用的那个函数，而壳说的是它对
   用户可见的事件（过去时）。两套词各自成立，不需要对齐。
 - **两种行不记**：`nva_app_create` 自己的拒绝（那一刻还没有对象，没有可说话的出口，而壳那边
   已经有 `app create failed: status=N`），以及 `nva_app_get_stats` 的拒绝（查询不是事件，
   逐帧记录会把事件埋掉）。两处都是判断，写在 `crates/nva-runtime/src/app.rs` 的模块注释里。
+- **#93 之后多两行统计。** 每次 attach 成功、每次 detach 成功后，壳各读一次
+  `nva_app_get_stats` 并写一行 `attach stats presents=N generation=G submits=S` /
+  `detach stats presents=N generation=G submits=S`。`presents` 是运行时渲染线程的上屏次数，
+  **进程内累计、不按 attach 轮次清零**：attach 那行正常 ≥1（运行时在 attach 里等首帧最多 1 秒），
+  detach 那行是这个 run 的累计值，HOME 之后不再增长；要按轮次比较（例如「这一轮上了多少帧」）
+  得自己取两次快照做差，别指望 detach 行的数字从 0 开始。`generation` 是**粘性**的，detach
+  不清零，所以「最后一代是多少」与「现在有没有窗口」是两件事——#94 的 JSON 会用 `generation`
+  加一个自己的 `attached` 字段把两者分开。#94 会把这两行换成为 JSON，字段契约以那张票为准，
+  别在这里加解析器。这两个时刻之外，运行时**不会**从渲染线程写任何行：日志文件仍然只有一个
+  写者（本线程）。
 
