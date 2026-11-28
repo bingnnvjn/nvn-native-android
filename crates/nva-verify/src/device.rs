@@ -30,8 +30,15 @@ pub const COMMAND: &str = "device";
 const PACKAGE: &str = "com.bingnnvjn.nva";
 const ACTIVITY: &str = "com.bingnnvjn.nva/.MainActivity";
 const PIXEL_GREEN: u32 = 0xff00ff00;
+/// `PixelFormat.RGBA_8888` / `ANDROID_BITMAP_FORMAT_RGBA_8888` in the raw
+/// screencap header. Other formats are not decoded.
+const ANDROID_FORMAT_RGBA_8888: u32 = 1;
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(20);
 const DETACH_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long to keep reading after the detach snapshot before accepting that
+/// no `detached_submit` signal will follow it (the runtime writes the snapshot
+/// first and the signal second).
+const SIGNAL_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// A failed pre-step: the exit code the CLI returns and the reason on stderr.
@@ -55,16 +62,25 @@ struct Options {
 
 /// Entry point called by `main.rs` with the arguments after `device`.
 pub fn run_cli(args: &[String]) -> i32 {
-    let options = match parse_args(args) {
+    let mut options = match parse_args(args) {
         Ok(options) => options,
         Err(failure) => {
             eprintln!("device: {}", failure.detail);
             return failure.exit;
         }
     };
-    if let Err(failure) = ensure_private_root(&options.private_root) {
-        eprintln!("device: {}", failure.detail);
-        return failure.exit;
+    options.private_root = match ensure_private_root(&options.private_root) {
+        Ok(root) => root,
+        Err(failure) => {
+            eprintln!("device: {}", failure.detail);
+            return failure.exit;
+        }
+    };
+    if let Some(json) = &options.json {
+        if let Err(failure) = ensure_json_inside_root(json, &options.private_root) {
+            eprintln!("device: {}", failure.detail);
+            return failure.exit;
+        }
     }
 
     let mut report = Report::new(options);
@@ -154,9 +170,15 @@ fn parse_args(args: &[String]) -> Result<Options, Failure> {
     Ok(Options { json, private_root })
 }
 
+/// Mounts, by path prefix, that PRIVACY §2 excludes from the private root.
+const FORBIDDEN_ROOTS: [&str; 3] = ["/mnt", "/media", "/run/media"];
+
 /// The private root must already exist and be writable; preparing it is an
 /// operator precondition, not something the verifier creates from nothing.
-fn ensure_private_root(root: &Path) -> Result<(), Failure> {
+///
+/// Returns the canonical path: `--json` containment and the actual writes must
+/// use the same resolved path, or a symlink could move the evidence outside.
+fn ensure_private_root(root: &Path) -> Result<PathBuf, Failure> {
     if !root.is_dir() {
         return Err(fail(
             EXIT_ORACLE,
@@ -166,13 +188,94 @@ fn ensure_private_root(root: &Path) -> Result<(), Failure> {
             ),
         ));
     }
-    let evidence = root.join("evidence").join("96");
+    let canonical = fs::canonicalize(root).map_err(|error| {
+        fail(
+            EXIT_ORACLE,
+            format!("cannot resolve private root {}: {error}", root.display()),
+        )
+    })?;
+    for prefix in FORBIDDEN_ROOTS {
+        let prefix = Path::new(prefix);
+        if canonical == prefix || canonical.starts_with(prefix) {
+            return Err(fail(
+                EXIT_ORACLE,
+                format!(
+                    "private root {} is on a Windows or removable mount, not a private root",
+                    canonical.display()
+                ),
+            ));
+        }
+    }
+
+    let work_tree = Command::new("git")
+        .args(["-C"])
+        .arg(&canonical)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map_err(|error| {
+            fail(
+                EXIT_ORACLE,
+                format!("cannot run git to check the private root: {error}"),
+            )
+        })?;
+    if String::from_utf8_lossy(&work_tree.stdout).trim() == "true" {
+        return Err(fail(
+            EXIT_ORACLE,
+            format!(
+                "private root {} is inside a git work tree; move it outside the repository",
+                canonical.display()
+            ),
+        ));
+    }
+
+    let evidence = canonical.join("evidence").join("96");
     fs::create_dir_all(&evidence).map_err(|error| {
         fail(
             EXIT_ORACLE,
-            format!("private root {} is not writable: {error}", root.display()),
+            format!(
+                "private root {} is not writable: {error}",
+                canonical.display()
+            ),
         )
-    })
+    })?;
+    Ok(canonical)
+}
+
+/// `--json` must land inside the canonical private root. The parent may not
+/// exist yet; the nearest existing ancestor is resolved, so a symlink inside
+/// the root cannot redirect the evidence file elsewhere.
+fn ensure_json_inside_root(json: &Path, root: &Path) -> Result<(), Failure> {
+    let parent = json
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut probe = parent.to_path_buf();
+    while !probe.exists() {
+        let next = match probe.parent() {
+            Some(next) if next != probe => next.to_path_buf(),
+            _ => break,
+        };
+        probe = next;
+    }
+    let canonical = fs::canonicalize(&probe).map_err(|error| {
+        fail(
+            EXIT_ORACLE,
+            format!(
+                "cannot resolve the --json parent {}: {error}",
+                json.display()
+            ),
+        )
+    })?;
+    if !canonical.starts_with(root) {
+        return Err(fail(
+            EXIT_ORACLE,
+            format!(
+                "--json {} is outside the private root; evidence stays private (docs/PRIVACY.md §2)",
+                json.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Everything `docs/GATES.md` §1 takes from the machine.
@@ -391,29 +494,39 @@ fn capture_m0b(adb: &Adb) -> Result<Capture, Failure> {
     adb.text(&["logcat", "-c"])?;
     adb.text(&["shell", "am", "start", "-n", ACTIVITY])?;
     poll_snapshots(adb, ATTACH_TIMEOUT, "the attach snapshot", |snapshots| {
-        snapshots.iter().any(|snapshot| snapshot.attached)
+        ready_attach(snapshots).is_some()
     })?;
 
     let raw = screencap(adb)?;
-    let pixel = centre_pixel(&raw).ok_or_else(|| {
-        fail(
+    let pixel = centre_pixel(&raw).map_err(|error| match error {
+        PixelError::UnsupportedFormat(format) => fail(
+            EXIT_MISMATCH,
+            format!("screencap format {format} is not RGBA_8888; the pixel cannot be sampled"),
+        ),
+        PixelError::Malformed => fail(
             EXIT_MISMATCH,
             "screencap is not a raw RGBA frame whose header matches its length",
-        )
+        ),
     })?;
 
     adb.text(&["shell", "input", "keyevent", "KEYCODE_HOME"])?;
-    let (logcat, snapshots) =
-        poll_snapshots(adb, DETACH_TIMEOUT, "the detach snapshot", |snapshots| {
-            snapshots.iter().any(|snapshot| !snapshot.attached)
-        })?;
+    let (logcat, _) = poll_snapshots(adb, DETACH_TIMEOUT, "the detach snapshot", |snapshots| {
+        snapshots.iter().any(|snapshot| !snapshot.attached)
+    })?;
+    let logcat = drain_signal(adb, logcat)?;
+    let snapshots = statslog::parse_stream(&logcat).map_err(|error| {
+        fail(
+            EXIT_MISMATCH,
+            format!("cannot parse the nva-stats run: {error:?}"),
+        )
+    })?;
 
-    let attached = snapshots
-        .iter()
-        .rev()
-        .find(|snapshot| snapshot.attached)
-        .copied()
-        .ok_or_else(|| fail(EXIT_MISMATCH, "the run has no attach snapshot"))?;
+    let attached = ready_attach(&snapshots).ok_or_else(|| {
+        fail(
+            EXIT_MISMATCH,
+            "the run has no attach snapshot with presents >= 1",
+        )
+    })?;
     let detached = snapshots
         .iter()
         .rev()
@@ -467,6 +580,34 @@ where
     }
 }
 
+/// The attach snapshot that proves a measured surface: `attached:true` and at
+/// least one present. A 0x0 `surfaceCreated` can attach with `presents:0`
+/// (`docs/DEVICE-LOGS.md` §9); the next `surfaceChanged` attach is the one the
+/// gate reads, so its own `presents:0` must not end the wait.
+fn ready_attach(snapshots: &[Snapshot]) -> Option<Snapshot> {
+    snapshots
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.attached && snapshot.presents >= 1)
+        .copied()
+}
+
+/// Reads once more after the detach snapshot, for up to
+/// [`SIGNAL_DRAIN_TIMEOUT`], because the runtime writes the detach snapshot
+/// before it reads and logs the post-stop present count. Accepting the first
+/// read would turn "snapshot written, signal not yet written" into a false
+/// pass.
+fn drain_signal(adb: &Adb, mut logcat: String) -> Result<String, Failure> {
+    let deadline = Instant::now() + SIGNAL_DRAIN_TIMEOUT;
+    loop {
+        if has_detached_submit(&logcat) || Instant::now() >= deadline {
+            return Ok(logcat);
+        }
+        thread::sleep(POLL_INTERVAL);
+        logcat = adb.text(&["logcat", "-d", "-s", "nva-stats"])?;
+    }
+}
+
 fn screencap(adb: &Adb) -> Result<Vec<u8>, Failure> {
     let output = adb.output(&["exec-out", "screencap"])?;
     if !output.status.success() {
@@ -512,32 +653,51 @@ fn process_alive(adb: &Adb) -> bool {
     }
 }
 
+/// Why a raw screencap cannot be sampled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PixelError {
+    /// The header or its declared length is not a raw frame this reader uses.
+    Malformed,
+    /// Only RGBA_8888 is decoded; the header names another format.
+    UnsupportedFormat(u32),
+}
+
 /// Reads the centre pixel from `adb exec-out screencap`'s raw stream.
 ///
 /// The header is `u32 width, u32 height, u32 format` and, on Android 10+, one
 /// extra `u32 colorspace`; the header size is whatever remains after `w*h*4`
-/// bytes, so both 12 and 16 byte headers are accepted. No PNG decoding.
-fn centre_pixel(raw: &[u8]) -> Option<u32> {
+/// bytes, so both 12 and 16 byte headers are accepted. Only format `1`
+/// (`PixelFormat.RGBA_8888`) is decoded — the 4-byte pixel packing and the
+/// `0xff00ff00` expectation both depend on it. An unexpected format is
+/// evidence disagreement (`2`), not a missing device (`3`). No PNG decoding.
+fn centre_pixel(raw: &[u8]) -> Result<u32, PixelError> {
     if raw.len() < 12 {
-        return None;
+        return Err(PixelError::Malformed);
     }
-    let width = u32::from_le_bytes(raw[0..4].try_into().ok()?);
-    let height = u32::from_le_bytes(raw[4..8].try_into().ok()?);
+    let width = u32::from_le_bytes(raw[0..4].try_into().map_err(|_| PixelError::Malformed)?);
+    let height = u32::from_le_bytes(raw[4..8].try_into().map_err(|_| PixelError::Malformed)?);
+    let format = u32::from_le_bytes(raw[8..12].try_into().map_err(|_| PixelError::Malformed)?);
+    if format != ANDROID_FORMAT_RGBA_8888 {
+        return Err(PixelError::UnsupportedFormat(format));
+    }
     if width == 0 || height == 0 {
-        return None;
+        return Err(PixelError::Malformed);
     }
     let pixels = (width as usize)
-        .checked_mul(height as usize)?
-        .checked_mul(4)?;
-    let header = raw.len().checked_sub(pixels)?;
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(PixelError::Malformed)?;
+    let header = raw.len().checked_sub(pixels).ok_or(PixelError::Malformed)?;
     if header != 12 && header != 16 {
-        return None;
+        return Err(PixelError::Malformed);
     }
     let x = width as usize / 2;
     let y = height as usize / 2;
     let offset = header + (y * width as usize + x) * 4;
-    let bytes = raw.get(offset..offset + 4)?;
-    Some(u32::from_le_bytes(bytes.try_into().ok()?))
+    let bytes = raw.get(offset..offset + 4).ok_or(PixelError::Malformed)?;
+    Ok(u32::from_le_bytes(
+        bytes.try_into().map_err(|_| PixelError::Malformed)?,
+    ))
 }
 
 /// The independent M0b verdict. It checks only `docs/GATES.md` §4's criteria;
@@ -822,9 +982,21 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        centre_pixel, is_sha256, line_containing, utc_from_seconds, verdict_m0b, M0bFacts,
-        PIXEL_GREEN,
+        centre_pixel, is_sha256, line_containing, ready_attach, utc_from_seconds, verdict_m0b,
+        M0bFacts, PixelError, Snapshot, PIXEL_GREEN,
     };
+
+    fn snapshot(attached: bool, presents: u32) -> Snapshot {
+        Snapshot {
+            presents,
+            surface_generation: 1,
+            attached,
+            generation: 1,
+            submits: 1,
+            validation_available: 0,
+            validation_errors: 0,
+        }
+    }
 
     fn facts() -> M0bFacts {
         M0bFacts {
@@ -881,7 +1053,7 @@ mod tests {
             let offset = ((height / 2 * width + width / 2) * 4) as usize;
             pixels[offset..offset + 4].copy_from_slice(&PIXEL_GREEN.to_le_bytes());
             raw.extend_from_slice(&pixels);
-            assert_eq!(centre_pixel(&raw), Some(PIXEL_GREEN), "header {header}");
+            assert_eq!(centre_pixel(&raw), Ok(PIXEL_GREEN), "header {header}");
         }
     }
 
@@ -892,7 +1064,28 @@ mod tests {
         raw.extend_from_slice(&4u32.to_le_bytes());
         raw.extend_from_slice(&1u32.to_le_bytes());
         raw.extend_from_slice(&[0u8; 8]); // far short of 4 * 4 * 4 data bytes
-        assert_eq!(centre_pixel(&raw), None);
+        assert_eq!(centre_pixel(&raw), Err(PixelError::Malformed));
+    }
+
+    #[test]
+    fn centre_pixel_rejects_a_non_rgba_format() {
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&4u32.to_le_bytes());
+        raw.extend_from_slice(&4u32.to_le_bytes());
+        raw.extend_from_slice(&2u32.to_le_bytes()); // RGBX_8888, not RGBA_8888
+        raw.extend_from_slice(&[0u8; 16]);
+        assert_eq!(centre_pixel(&raw), Err(PixelError::UnsupportedFormat(2)));
+    }
+
+    #[test]
+    fn zero_present_attach_is_not_ready() {
+        assert_eq!(ready_attach(&[snapshot(true, 0)]), None);
+        let measured = [snapshot(true, 0), snapshot(true, 1)];
+        assert_eq!(
+            ready_attach(&measured),
+            Some(snapshot(true, 1)),
+            "the next attach with a present is the one the gate reads"
+        );
     }
 
     #[test]

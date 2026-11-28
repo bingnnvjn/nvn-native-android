@@ -36,8 +36,8 @@ fn run() -> i32 {
             eprintln!("usage: nva-verify loadplan --fixture <pack-dir>");
             eprintln!("       nva-verify smoke [--headless] [--frames N] [--json [FILE]]");
             eprintln!(
-                "       nva-verify device --scenario m0b --json <out> \
-                 --private-root <path> --m0a-machine-green"
+                "       nva-verify device --scenario m0b [--json <out>] \
+                 --private-root <path> --m0a-machine-green   (--json omitted: stdout)"
             );
             loadplan::EXIT_MISMATCH
         }

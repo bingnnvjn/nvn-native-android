@@ -21,10 +21,19 @@ case "$cmd" in
   logcat)
     sub=${1:-}
     case "$sub" in
-      -c) rm -f "$state/home"; exit 0 ;;
+      -c) rm -f "$state/home" "$state/drained"; exit 0 ;;
       -d)
         cat "$state/attach.log"
-        if [ -f "$state/home" ]; then cat "$state/detach.log"; fi
+        if [ -f "$state/home" ]; then
+          cat "$state/detach.log"
+          if [ "${FAKE_LATE_SIGNAL:-0}" = 1 ]; then
+            if [ -f "$state/drained" ]; then
+              cat "$state/signal.log"
+            else
+              touch "$state/drained"
+            fi
+          fi
+        fi
         exit 0 ;;
       *) exit 0 ;;
     esac ;;
@@ -85,6 +94,11 @@ const DETACH_AFTER_HOME_GROWTH: &str = "13:40:12.918 [rt] info nva-stats: {\"pre
 
 const DETACHED_SUBMIT_SIGNAL: &str = "13:40:12.919 [rt] info nva-stats: \
     {\"event\":\"detached_submit\",\"count\":2,\"generation\":1}\n";
+
+/// The 0x0 `surfaceCreated` attach, then the measured `surfaceChanged` attach.
+const ZERO_PRESENT_ATTACH: &str = "13:40:12.400 [rt] info nva-stats: {\"presents\":0,\
+    \"surface_generation\":1,\"attached\":true,\"generation\":1,\"submits\":0,\
+    \"validation_available\":0,\"validation_errors\":0}\n";
 
 /// `(R,G,B,A) = (0,255,0,255)` read as a little-endian u32.
 const GREEN_PIXEL: u32 = 0xff00ff00;
@@ -156,20 +170,70 @@ fn write_script(path: &Path) {
 }
 
 /// Writes a 16-byte-header raw screencap (Android 10+ shape) with `centre` at
-/// the middle of a 4x4 RGBA_8888 image.
-fn write_raw_screencap(path: &Path, centre: u32) {
+/// the middle of a 4x4 image in `format` (1 is RGBA_8888).
+fn write_raw_screencap(path: &Path, centre: u32, format: u32) {
     const WIDTH: u32 = 4;
     const HEIGHT: u32 = 4;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&WIDTH.to_le_bytes());
     bytes.extend_from_slice(&HEIGHT.to_le_bytes());
-    bytes.extend_from_slice(&1u32.to_le_bytes()); // RGBA_8888
+    bytes.extend_from_slice(&format.to_le_bytes());
     bytes.extend_from_slice(&0u32.to_le_bytes()); // colorspace
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
     let offset = ((HEIGHT / 2 * WIDTH + WIDTH / 2) * 4) as usize;
     pixels[offset..offset + 4].copy_from_slice(&centre.to_le_bytes());
     bytes.extend_from_slice(&pixels);
     fs::write(path, bytes).expect("write the raw screencap");
+}
+
+/// The SHA-256 of one evidence file, read back through the same system tool the
+/// verifier uses.
+fn sha256_hex(path: &Path) -> String {
+    let output = Command::new("sha256sum")
+        .arg("--")
+        .arg(path)
+        .output()
+        .expect("run sha256sum");
+    assert!(output.status.success(), "sha256sum {}", path.display());
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .expect("sha256sum prints a digest")
+        .to_string()
+}
+
+/// The evidence hashes ordered by evidence file name, computed from disk.
+fn expected_evidence_hashes(evidence_dir: &Path) -> Vec<String> {
+    let mut files: Vec<(String, String)> = fs::read_dir(evidence_dir)
+        .expect("list the evidence dir")
+        .map(|entry| entry.expect("read an evidence entry").path())
+        .filter(|path| path.is_file())
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("an evidence file has a UTF-8 name")
+                .to_string();
+            (name, sha256_hex(&path))
+        })
+        .collect();
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files.into_iter().map(|(_, hash)| hash).collect()
+}
+
+/// The single `result` value a fresh private root's ledger holds.
+fn ledger_result(root: &Path) -> String {
+    use nva_verify::json::{parse, Value};
+
+    let ledger = fs::read_to_string(root.join("gate-ledger.jsonl")).expect("read the ledger");
+    let lines: Vec<&str> = ledger.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines.len(), 1, "one run appends exactly one entry");
+    let entry = parse(lines[0]).expect("a ledger line is one JSON object");
+    entry
+        .get("result")
+        .and_then(Value::as_str)
+        .expect("the ledger has a string result")
+        .to_string()
 }
 
 fn write_logs(state: &Path, attach: &str, detach: &str) {
@@ -230,7 +294,7 @@ fn device_ledger_entry_is_eight_key_json() {
     let state = TempDir::new("ledger-state");
     let adb = state.path().join("adb");
     write_script(&adb);
-    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
     write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_SNAPSHOT);
 
     let evidence_dir = root.path().join("evidence").join("96");
@@ -327,14 +391,16 @@ fn device_ledger_entry_is_eight_key_json() {
             hash.to_string()
         })
         .collect();
+    let expected = expected_evidence_hashes(&evidence_dir);
     assert_eq!(
-        hashes.len(),
+        expected.len(),
         3,
-        "JSON, raw screenshot and logcat are the evidence files"
+        "a green run writes JSON, raw screenshot and logcat"
     );
-    let mut sorted = hashes.clone();
-    sorted.sort();
-    assert_eq!(hashes, sorted, "evidence hashes sort by file name");
+    assert_eq!(
+        hashes, expected,
+        "evidence_sha256[] holds the on-disk hashes ordered by file name"
+    );
 }
 
 #[test]
@@ -344,12 +410,16 @@ fn device_pixel_mismatch_exits_2() {
     let state = TempDir::new("pixel-state");
     let adb = state.path().join("adb");
     write_script(&adb);
-    write_raw_screencap(&state.path().join("screen.raw"), RED_PIXEL);
+    write_raw_screencap(&state.path().join("screen.raw"), RED_PIXEL, 1);
     write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_SNAPSHOT);
+    let json_path = root.path().join("evidence").join("96").join("m0b.json");
     let output = run_device(
         repo.path(),
         &fake_env(&adb, state.path()),
-        &device_args(root.path().to_str().expect("utf-8 root"), None),
+        &device_args(
+            root.path().to_str().expect("utf-8 root"),
+            Some(json_path.to_str().expect("utf-8 json")),
+        ),
     );
 
     let code = exit_code(&output);
@@ -359,6 +429,45 @@ fn device_pixel_mismatch_exits_2() {
         stderr.contains("pixel"),
         "the reason must name the pixel mismatch; stderr: {stderr}"
     );
+    assert_eq!(
+        ledger_result(root.path()),
+        "mismatch",
+        "exit 2 maps to the mismatch result"
+    );
+}
+
+#[test]
+fn device_unsupported_pixel_format_exits_2() {
+    let repo = temp_git_repo("pixel-format");
+    let root = TempDir::new("pixel-format-root");
+    let state = TempDir::new("pixel-format-state");
+    let adb = state.path().join("adb");
+    write_script(&adb);
+    // RGBX_8888 (2), not RGBA_8888 (1): the pixel packing is not the one the
+    // verifier decodes, so this is evidence disagreement, not a device failure.
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 2);
+    write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_SNAPSHOT);
+    let json_path = root.path().join("evidence").join("96").join("m0b.json");
+    let output = run_device(
+        repo.path(),
+        &fake_env(&adb, state.path()),
+        &device_args(
+            root.path().to_str().expect("utf-8 root"),
+            Some(json_path.to_str().expect("utf-8 json")),
+        ),
+    );
+
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 2,
+        "an unsupported screencap format must exit 2; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("format 2"),
+        "the reason must name the format; stderr: {stderr}"
+    );
+    assert_eq!(ledger_result(root.path()), "mismatch");
 }
 
 #[test]
@@ -370,7 +479,7 @@ fn device_rendering_between_attach_and_home_is_normal() {
     let state = TempDir::new("home-growth-state");
     let adb = state.path().join("adb");
     write_script(&adb);
-    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
     write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_AFTER_HOME_GROWTH);
 
     let evidence_dir = root.path().join("evidence").join("96");
@@ -417,7 +526,7 @@ fn device_detached_submit_exits_2() {
     let state = TempDir::new("detached-submit-state");
     let adb = state.path().join("adb");
     write_script(&adb);
-    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
     write_logs(
         state.path(),
         ATTACH_SNAPSHOT,
@@ -434,6 +543,83 @@ fn device_detached_submit_exits_2() {
     assert_eq!(
         code, 2,
         "a detached_submit signal fails the fourth criterion; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("detached_submit=true"),
+        "the reason must name the signal; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn device_zero_present_attach_waits_for_the_measured_attach() {
+    use nva_verify::json::{parse, Value};
+
+    let repo = temp_git_repo("zero-attach");
+    let root = TempDir::new("zero-attach-root");
+    let state = TempDir::new("zero-attach-state");
+    let adb = state.path().join("adb");
+    write_script(&adb);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
+    write_logs(
+        state.path(),
+        &format!("{ZERO_PRESENT_ATTACH}{ATTACH_SNAPSHOT}"),
+        DETACH_SNAPSHOT,
+    );
+    let json_path = root.path().join("evidence").join("96").join("m0b.json");
+    let output = run_device(
+        repo.path(),
+        &fake_env(&adb, state.path()),
+        &device_args(
+            root.path().to_str().expect("utf-8 root"),
+            Some(json_path.to_str().expect("utf-8 json")),
+        ),
+    );
+
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 0,
+        "a 0x0 attach followed by a measured attach must pass; stderr: {stderr}"
+    );
+    let evidence = parse(&fs::read_to_string(&json_path).expect("read the evidence JSON"))
+        .expect("the evidence file is JSON");
+    assert_eq!(
+        evidence.get("presents").and_then(Value::as_i64),
+        Some(1),
+        "the gate reads the measured attach, not the 0x0 one"
+    );
+    assert_eq!(
+        evidence.get("surface_generation").and_then(Value::as_i64),
+        Some(1)
+    );
+}
+
+#[test]
+fn device_late_detached_submit_signal_exits_2() {
+    let repo = temp_git_repo("late-signal");
+    let root = TempDir::new("late-signal-root");
+    let state = TempDir::new("late-signal-state");
+    let adb = state.path().join("adb");
+    write_script(&adb);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
+    write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_SNAPSHOT);
+    // The signal is missing from the first post-HOME read and appears only on
+    // the drain read, exactly the race the drain exists to close.
+    fs::write(state.path().join("signal.log"), DETACHED_SUBMIT_SIGNAL)
+        .expect("write the late signal");
+    let mut envs = fake_env(&adb, state.path());
+    envs.push(("FAKE_LATE_SIGNAL", "1"));
+    let output = run_device(
+        repo.path(),
+        &envs,
+        &device_args(root.path().to_str().expect("utf-8 root"), None),
+    );
+
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 2,
+        "a signal written after the detach snapshot must still fail the gate; stderr: {stderr}"
     );
     assert!(
         stderr.contains("detached_submit=true"),
@@ -499,12 +685,68 @@ fn device_missing_m0a_declaration_exits_3() {
 }
 
 #[test]
+fn device_private_root_inside_git_tree_exits_3() {
+    let repo = temp_git_repo("root-in-git");
+    let output = run_device(
+        repo.path(),
+        &[],
+        &[
+            "device",
+            "--scenario",
+            "m0b",
+            "--private-root",
+            repo.path().to_str().expect("utf-8 root"),
+            "--m0a-machine-green",
+        ],
+    );
+
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 3,
+        "a private root inside the repository is unprepared; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("git work tree"),
+        "the reason must name the git work tree; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn device_json_outside_private_root_exits_3() {
+    let repo = temp_git_repo("json-outside");
+    let root = TempDir::new("json-outside-root");
+    let outside = TempDir::new("json-outside-target");
+    let json_path = outside.path().join("m0b.json");
+    let output = run_device(
+        repo.path(),
+        &[],
+        &device_args(
+            root.path().to_str().expect("utf-8 root"),
+            Some(json_path.to_str().expect("utf-8 json")),
+        ),
+    );
+
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 3,
+        "--json outside the private root is unprepared; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("outside the private root"),
+        "the reason must name the private-root boundary; stderr: {stderr}"
+    );
+}
+
+#[test]
 fn device_stale_apk_exits_4() {
     let repo = temp_git_repo("stale-apk");
     let root = TempDir::new("stale-apk-root");
     let state = TempDir::new("stale-apk-state");
     let adb = state.path().join("adb");
     write_script(&adb);
+    let json_path = root.path().join("evidence").join("96").join("m0b.json");
     let output = run_device(
         repo.path(),
         &[
@@ -515,7 +757,10 @@ fn device_stale_apk_exits_4() {
             ),
             ("FAKE_STALE_APK", "1"),
         ],
-        &device_args(root.path().to_str().expect("utf-8 root"), None),
+        &device_args(
+            root.path().to_str().expect("utf-8 root"),
+            Some(json_path.to_str().expect("utf-8 json")),
+        ),
     );
 
     let code = exit_code(&output);
@@ -528,16 +773,25 @@ fn device_stale_apk_exits_4() {
         stderr.contains("APK") || stderr.contains("package"),
         "the reason must name the stale APK; stderr: {stderr}"
     );
+    assert_eq!(
+        ledger_result(root.path()),
+        "stale",
+        "exit 4 maps to the stale result"
+    );
 }
 
 #[test]
 fn device_no_adb_exits_3() {
     let repo = temp_git_repo("no-adb");
     let root = TempDir::new("no-adb-root");
+    let json_path = root.path().join("evidence").join("96").join("m0b.json");
     let output = run_device(
         repo.path(),
         &[("NVA_ADB", "/nonexistent/nva-fake-adb")],
-        &device_args(root.path().to_str().expect("utf-8 root"), None),
+        &device_args(
+            root.path().to_str().expect("utf-8 root"),
+            Some(json_path.to_str().expect("utf-8 json")),
+        ),
     );
 
     let code = exit_code(&output);
@@ -550,5 +804,10 @@ fn device_no_adb_exits_3() {
     assert!(
         !stderr.contains("not implemented"),
         "device is implemented now, not a pending oracle; stderr: {stderr}"
+    );
+    assert_eq!(
+        ledger_result(root.path()),
+        "unavailable",
+        "exit 3 maps to the unavailable result"
     );
 }

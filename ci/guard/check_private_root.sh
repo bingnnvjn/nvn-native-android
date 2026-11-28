@@ -14,7 +14,10 @@ if (($# != 1)); then
   exit 2
 fi
 
-for tool in realpath findmnt; do
+# `NVA_GIT` is a test seam, like `NVA_CARGO` in check_style.sh; production
+# uses `git`. A missing git is a broken check (2), not a silent pass.
+git_bin=${NVA_GIT:-git}
+for tool in realpath findmnt "$git_bin"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "check_private_root: $tool is required" >&2
     exit 2
@@ -59,11 +62,9 @@ case "$filesystem" in
   *) reject "filesystem $filesystem is not ext4|btrfs|xfs|zfs" ;;
 esac
 
-if command -v git >/dev/null 2>&1; then
-  inside=$(git -C "$probe" rev-parse --is-inside-work-tree 2>/dev/null || true)
-  if [[ $inside == true ]]; then
-    reject "inside a git work tree"
-  fi
+inside=$("$git_bin" -C "$probe" rev-parse --is-inside-work-tree 2>/dev/null || true)
+if [[ $inside == true ]]; then
+  reject "inside a git work tree"
 fi
 
 echo "check_private_root: $path on $filesystem is acceptable"

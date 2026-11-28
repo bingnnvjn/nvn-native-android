@@ -250,8 +250,11 @@ adb logcat -d -s nva-stats          # run 之后只取快照
 **`device --scenario m0b` 如何消费快照（#96）**
 
 - **attach 快照**（`attached:true`）：`surface_generation`、`presents` 与
-  `validation_available` / `validation_errors` 取自这里；像素另从
-  `adb exec-out screencap` 的原始流取窗口中心（12 / 16 B 头都接受，不做 PNG 解码）。
+  `validation_available` / `validation_errors` 取自这里；就绪条件是 `attached:true`
+  且 `presents >= 1`，0x0 surface 的 `presents:0` attach 不结束等待（§9 上文），
+  继续等下一条带测量值的 attach。像素另从 `adb exec-out screencap` 的原始流取窗口
+  中心（12 / 16 B 头都接受，不做 PNG 解码）；raw 头 `format` 只接受 `1`
+  （`PixelFormat.RGBA_8888`），其他格式无法按本判据解包，按证据不符退 `2`。
 - **detach 快照**（`attached:false`）：`presents` 是 stop 置位、渲染线程 join 之后的
   冻结值，**包含 attach 到 HOME 之间正常渲染的帧**，所以不能用它与 attach 快照的差值
   判失败。POST-HOME 是否还在提交由下一条信号判定；进程消失另记 `crashed`（→ `2`）。

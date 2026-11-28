@@ -397,6 +397,8 @@ expect_rc 0 bash ci/guard/check_private_root.sh "$TMP/not-created-yet"
 expect_rc 1 bash ci/guard/check_private_root.sh "$ROOT"
 expect_rc 2 bash ci/guard/check_private_root.sh
 expect_rc 2 bash ci/guard/check_private_root.sh one two
+# A missing git is a broken check (2), not a silent pass.
+expect_rc 2 env NVA_GIT=/nonexistent/git bash ci/guard/check_private_root.sh "$TMP"
 
 # --- check_style.sh (#53) --------------------------------------------------
 # The gate must be able to fail. guard has no Rust toolchain, so a stub cargo

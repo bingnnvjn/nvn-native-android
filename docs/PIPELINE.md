@@ -293,8 +293,11 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 - 不用 `ubuntu-latest` 漂移：钉 `ubuntu-24.04` / `ubuntu-24.04-arm`。
 - 不做 SLSA attestation（v0 无发布信任需求；做法见 §4.3）。
 - **真机项永不进 CI**：725 第一帧、帧时间 p95、8 MRT ≤28 ms、device validation——lavapipe 跑不了，写进 CI 就是自欺。
-- **M0b 真机载体**：`nva-verify device --scenario m0b --json <out> --private-root <path> --m0a-machine-green`
+- **M0b 真机载体**：`nva-verify device --scenario m0b [--json <out>] --private-root <path> --m0a-machine-green`
   在本机执行，证据与台账写私有根（PRIVACY §2），不产出公开 artifact；CI 只跑它的假 adb 合同测试。
+  `--json` 省略时写 stdout。verifier 拒绝 PRIVACY §2 排除的挂载、git 工作树内的私有根，
+  以及私有根之外的 `--json`（均退 `3`）；`apk_sha256` 由 verifier 从设备取回写入证据，
+  与本地 APK 的比对是操作者步骤（GATES §1「取回本地比对」），CLI 不接收 `--apk`。
 
 ## 9. 实测记录（2026-10-31）
 
