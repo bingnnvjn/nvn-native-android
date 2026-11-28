@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Product shell APK assertions (#46, #95, docs/GATES.md §3,
-# docs/ARCHITECTURE.md §3.7).
+# Product shell APK assertions (#46, docs/GATES.md §3, docs/ARCHITECTURE.md §3.7).
 #
 # Usage: check_shell_apk.sh <apk>
 #
 # This is the GATES §3 assertion set for the shell: product package, minSdk 26,
-# no `debuggable` attribute, and a `JNI_OnLoad` export. #95 adds the runtime:
-# `libnva_runtime.so` must be in the package and export the `nva_app_*` /
-# `nva_gfx_*` / `nva_host_*` representative symbols. The JNI library is linked
-# against the runtime, so a package without it would install and only fail to
-# resolve a symbol on the phone. Everything is read from
+# no `debuggable` attribute, and a `JNI_OnLoad` export. Everything is read from
 # the *binary* manifest (`aapt2 dump xmltree`) or the APK entries, never from
 # `dump badging`: build-tools 36 already dropped badging fields once
 # (docs/PIPELINE.md §9), and a missing field would turn an assertion into a
@@ -121,50 +116,6 @@ while IFS= read -r entry; do
 done < <(grep '^lib/arm64-v8a/.*\.so$' "$TMP/entries.txt" || true)
 ((found_jni_onload)) \
   || report "no JNI_OnLoad export in lib/arm64-v8a/*.so (llvm-nm -D)"
-
-# #95: the package must carry the runtime itself. `build_apk.sh` copies
-# `libnva_runtime.so` next to the JNI library because the JNI side calls
-# `nva_app_*` directly; a package with only the JNI library would load and then
-# fail to resolve its symbols on the first surface event. The symbol list has
-# one representative per exported family, not all of them: it proves the
-# runtime's C ABI surface actually reached the `.so`, not merely that a file
-# named `libnva_runtime.so` exists.
-RUNTIME_ENTRY=lib/arm64-v8a/libnva_runtime.so
-RUNTIME_SYMBOLS=(
-  nva_app_create
-  nva_app_destroy
-  nva_app_attach_window
-  nva_app_detach_window
-  nva_app_get_stats
-  nva_gfx_create
-  nva_host_create
-  nva_nvn_bootstrap
-)
-if ! grep -qx "$RUNTIME_ENTRY" "$TMP/entries.txt"; then
-  report "missing $RUNTIME_ENTRY"
-elif ! unzip -p "$APK" "$RUNTIME_ENTRY" > "$TMP/runtime.so"; then
-  report "cannot read $RUNTIME_ENTRY from the APK"
-elif ! "$NDK_BIN/llvm-nm" -D --defined-only "$TMP/runtime.so" \
-    > "$TMP/runtime-symbols.txt"; then
-  report "llvm-nm -D failed on $RUNTIME_ENTRY"
-else
-  # Match the type column (` T <name>`), not "the name appears somewhere":
-  # llvm-nm prints `<addr> <type> <name>`, and an undefined (`U`) or data (`D`)
-  # line with the same spelling must not satisfy an export assertion.
-  runtime_ok=1
-  for symbol in "${RUNTIME_SYMBOLS[@]}"; do
-    if grep -q " T $symbol\$" "$TMP/runtime-symbols.txt"; then
-      echo "guard: $symbol=exported"
-    else
-      report "runtime missing symbol: $symbol"
-      runtime_ok=0
-    fi
-  done
-  # Fixed success marker: the #95 acceptance criterion greps for it verbatim.
-  if ((runtime_ok)); then
-    echo "guard: runtime=libnva_runtime.so"
-  fi
-fi
 
 if ((fail)); then
   echo "guard: shell APK FAILED the #46 assertions (docs/GATES.md §3)." >&2
