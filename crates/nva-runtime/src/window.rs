@@ -679,14 +679,6 @@ impl Presenter {
         counters: &RenderCounters,
         stop: &AtomicBool,
     ) -> Result<Presented, PresentError> {
-        // #94: a present that begins after `detach` set `stop` still began, so
-        // it is counted and dropped before any swapchain call. The render
-        // thread never logs; the detach snapshot on the shell thread reads the
-        // count after the join.
-        if stop.load(Ordering::Acquire) {
-            counters.record_detached_submit();
-            return Err(PresentError::Stopped);
-        }
         let (Some(device), Some(swapchain_loader)) =
             (self.device.as_ref(), self.swapchain_loader.as_ref())
         else {
