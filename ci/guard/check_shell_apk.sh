@@ -126,10 +126,9 @@ def boolean(value):
     if value is None:
         return None
     value = value.strip()
-    if re.search(r"\(type 0x12\)0x0$", value):
-        return False
-    if re.search(r"\(type 0x12\)0x1$", value):
-        return True
+    typed = re.search(r"\(type 0x12\)0x([01])\b", value)
+    if typed:
+        return typed.group(1) == "1"
     if value.startswith("false"):
         return False
     if value.startswith("true"):
