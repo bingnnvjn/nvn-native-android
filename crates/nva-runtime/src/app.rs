@@ -105,6 +105,12 @@ impl Lifecycle {
 /// The tag on every line this module raises.
 const TAG: &CStr = c"nva-runtime";
 
+/// The tag on the stats snapshots (#94).
+///
+/// The shell hands this straight to logcat, so `logcat -d -s nva-stats`
+/// selects exactly the snapshots and nothing else (`docs/DEVICE-LOGS.md` §9).
+const NVA_STATS_TAG: &CStr = c"nva-stats";
+
 /// The shell's log callback, copied out of `nva_platform`.
 ///
 /// Only the two fields this module uses are copied, so the rest of the module
@@ -138,7 +144,7 @@ impl PlatformSink {
     /// here is built from literals and integers, so that arm is unreachable
     /// today, and dropping keeps a future format string from turning into a
     /// line that ends mid-sentence with no sign it was truncated.
-    fn say(&self, level: u32, message: &str) {
+    fn say(&self, level: u32, tag: &'static CStr, message: &str) {
         let Some(log) = self.log else {
             return;
         };
@@ -147,10 +153,12 @@ impl PlatformSink {
         };
         // SAFETY: `log` is the shell's function, written into `nva_platform` and
         // called with the C signature from `include/nva_abi.h` (user, level,
-        // tag, msg). `user` is the shell's own opaque pointer, unmodified; `TAG`
-        // is a `'static` C string and `message` outlives the call. The shell
-        // must keep whatever it reads behind them alive only for the call.
-        unsafe { log(self.user, level, TAG.as_ptr(), message.as_ptr()) };
+        // tag, msg). `user` is the shell's own opaque pointer, unmodified. The
+        // type says `tag: &'static CStr`, so its pointer stays valid for the
+        // whole process; `message` is NUL-terminated by `CString` above and
+        // outlives the call. The shell must not retain either pointer after
+        // the call returns.
+        unsafe { log(self.user, level, tag.as_ptr(), message.as_ptr()) };
     }
 }
 
@@ -219,7 +227,7 @@ struct State {
 
 /// What the render thread counts, shared with `nva_app_get_stats`.
 ///
-/// Behind one `Arc` rather than two fields of `App` because the thread must not
+/// Behind one `Arc` rather than three fields of `App` because the thread must not
 /// hold a pointer into a value the shell owns by raw pointer: one allocation,
 /// two owners, stable addresses.
 ///
@@ -234,6 +242,12 @@ struct State {
 pub(crate) struct RenderCounters {
     presents: AtomicU32,
     submits: AtomicU64,
+    /// Present calls that began after `stop` was set (#94).
+    ///
+    /// Counted by the render thread, read once on the shell thread after the
+    /// join. Same `Relaxed` argument as the other two: the join is the
+    /// happens-before edge that publishes it.
+    detached_submits: AtomicU32,
 }
 
 impl RenderCounters {
@@ -260,6 +274,31 @@ impl RenderCounters {
     /// The queue submits the render loop made.
     fn submits(&self) -> u64 {
         self.submits.load(Ordering::Relaxed)
+    }
+
+    /// Counts one present that found `stop` already set.
+    ///
+    /// Called by the render thread in `window.rs` when `detach` won the race
+    /// with a frame in flight. The host build has no render thread; its tests
+    /// call this directly to exercise the detach signal.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) fn record_detached_submit(&self) {
+        self.detached_submits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The presents that arrived after `stop` was set.
+    pub(crate) fn detached_submits(&self) -> u32 {
+        self.detached_submits.load(Ordering::Relaxed)
+    }
+
+    /// Clears the detached-submit count for the next attach (#94).
+    ///
+    /// The counter is process-wide. A rotation attaches the new window while
+    /// the old loop exits, so without this reset the previous generation's
+    /// detached submits would be reported by the signal a later detach raises
+    /// for the new generation.
+    pub(crate) fn reset_detached_submits(&self) {
+        self.detached_submits.store(0, Ordering::Relaxed);
     }
 }
 
@@ -302,7 +341,7 @@ impl SurfaceCallbacks {
 /// assumption is written down in the type rather than in a comment: every
 /// caller is the shell's main thread, which is why `App` is neither `Send` nor
 /// `Sync` and stays that way. #93's render thread is given an owned job plus
-/// these two shared counters (`window.rs`); it never holds an `&App`, so no
+/// these three shared counters (`window.rs`); it never holds an `&App`, so no
 /// `unsafe impl Sync` is needed or wanted.
 pub struct App {
     state: Mutex<State>,
@@ -328,8 +367,43 @@ impl App {
     /// state guard: the guard is dropped where the `Outcome` was built, and this
     /// runs afterwards.
     fn announce(&self, outcome: &Outcome) -> nva_status {
-        self.platform.say(outcome.level, &outcome.text);
+        self.platform.say(outcome.level, TAG, &outcome.text);
         outcome.status
+    }
+
+    /// Says one stats snapshot through the shell (`docs/DEVICE-LOGS.md` §9).
+    ///
+    /// `attached` is decided by the call site rather than read back from the
+    /// state: the detach snapshot is taken after the window record is gone, and
+    /// a value read there would race the transition being reported.
+    fn say_snapshot(&self, attached: bool) {
+        self.platform
+            .say(NVA_LOG_INFO, NVA_STATS_TAG, &self.stats_json(attached));
+    }
+
+    /// The one-line JSON snapshot #94 defines (`docs/DEVICE-LOGS.md` §9).
+    ///
+    /// Field order is part of the contract. The shell prefixes
+    /// `[rt] info nva-stats: `, so the object itself must fit 284 B = 305 B
+    /// (the message room after the 13-byte clock and the 2-byte reserve in
+    /// `SHELL_LOG_LINE`) − 21 B of prefix; `stats_json_fits_the_shell_line`
+    /// pins that bound. Serialising all twenty `nva_stats` fields here would
+    /// cross it and the shell would silently truncate the line.
+    ///
+    /// `validation_available` and `validation_errors` are constant 0 in the
+    /// product package: nothing in this ticket measures them and they do not
+    /// gate M0b, so #96 must not read them as evidence of a clean validation
+    /// run.
+    fn stats_json(&self, attached: bool) -> String {
+        let generation = self.last_generation.load(Ordering::Relaxed);
+        format!(
+            "{{\"presents\":{},\"surface_generation\":{},\"attached\":{},\"generation\":{},\"submits\":{},\"validation_available\":0,\"validation_errors\":0}}",
+            self.counters.presents(),
+            generation,
+            attached,
+            generation,
+            self.counters.submits()
+        )
     }
 }
 
@@ -349,7 +423,8 @@ impl App {
     /// moment they are printed is what puts them in a run's story.
     fn say_notes(&self, when: &str, notes: Vec<String>) {
         for note in notes {
-            self.platform.say(NVA_LOG_WARN, &format!("{when}: {note}"));
+            self.platform
+                .say(NVA_LOG_WARN, TAG, &format!("{when}: {note}"));
         }
     }
 
@@ -398,7 +473,7 @@ impl App {
                 // No thread, no frames: the snapshot stays at `presents = 0`,
                 // which is what the acceptance check reads.
                 self.platform
-                    .say(NVA_LOG_ERROR, &format!("attach: {reason}"));
+                    .say(NVA_LOG_ERROR, TAG, &format!("attach: {reason}"));
                 return;
             }
         };
@@ -411,7 +486,7 @@ impl App {
                 // ever detach.
                 let _ = render.stop_and_join();
                 self.platform
-                    .say(NVA_LOG_ERROR, "attach: the state lock is poisoned");
+                    .say(NVA_LOG_ERROR, TAG, "attach: the state lock is poisoned");
                 return;
             }
         }
@@ -422,11 +497,13 @@ impl App {
             // line either: the loop keeps presenting and `presents` will say so.
             FirstFrame::Pending => self.platform.say(
                 NVA_LOG_WARN,
+                TAG,
                 &format!("attach: first frame not ready in {FIRST_FRAME_TIMEOUT:?}"),
             ),
-            FirstFrame::Failed(reason) => self
-                .platform
-                .say(NVA_LOG_ERROR, &format!("attach: {reason}")),
+            FirstFrame::Failed(reason) => {
+                self.platform
+                    .say(NVA_LOG_ERROR, TAG, &format!("attach: {reason}"))
+            }
         }
         self.say_notes("attach", progress.take_notes());
     }
@@ -544,7 +621,7 @@ pub unsafe extern "C" fn nva_app_destroy(app: *mut App) {
     // `surfaceDestroyed`. The loop must still be joined here: it is the last
     // moment anything can present into that window.
     app.say_notes("destroy", app.stop_render_loop());
-    app.platform.say(NVA_LOG_INFO, "destroy");
+    app.platform.say(NVA_LOG_INFO, TAG, "destroy");
     drop(app);
 }
 
@@ -766,6 +843,16 @@ pub unsafe extern "C" fn nva_app_attach_window(
     if let Some(window) = recorded {
         app.start_render_loop(window);
     }
+    // #94: a rotation joins the old loop before the new one starts, so any
+    // submit that raced that stop belonged to the previous generation. Clear
+    // it here or the final detach's signal would name a generation that never
+    // submitted after its own stop.
+    app.counters.reset_detached_submits();
+    // #94: the attach snapshot is the first of the contract's three moments.
+    // It follows `start_render_loop` so `presents` is already the value the
+    // first frame left (on Android, attach waited for it), and it precedes
+    // `ready` so a shell that reads the log from inside that callback sees it.
+    app.say_snapshot(true);
     let callbacks = app.callbacks;
     if let Some(ready) = callbacks.ready {
         // SAFETY: `ready` is a shell function the shell itself wrote into
@@ -840,6 +927,22 @@ pub unsafe extern "C" fn nva_app_detach_window(app: *mut App, generation: u32) -
         return outcome.status;
     }
     app.say_notes("detach", notes);
+    // #94: the counts are frozen — the loop above was joined — and `attached`
+    // is false because this call is the transition that made it so.
+    app.say_snapshot(false);
+    // A submit that raced the stop is its own signal, not an inference from
+    // the snapshot counters. The join above means no later submit can change
+    // the count between this read and the line.
+    let detached_submits = app.counters.detached_submits();
+    if detached_submits > 0 {
+        app.platform.say(
+            NVA_LOG_INFO,
+            NVA_STATS_TAG,
+            &format!(
+                "{{\"event\":\"detached_submit\",\"count\":{detached_submits},\"generation\":{generation}}}"
+            ),
+        );
+    }
     let callbacks = app.callbacks;
     if let Some(lost) = callbacks.lost {
         // SAFETY: `lost` is a shell function the shell wrote into
@@ -1560,6 +1663,157 @@ mod tests {
     }
 
     #[test]
+    fn runtime_detach_snapshot_reports_attached_false() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: `app` is live; the window pointer is opaque to the runtime
+        // and the host build never dereferences it.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 640, 480, 3),
+                NVA_OK
+            );
+            assert_eq!(nva_app_detach_window(app, 3), NVA_OK);
+        }
+        destroy(app);
+
+        let lines = logs.take();
+        let snapshots: Vec<&Logged> = lines
+            .iter()
+            .filter(|line| line.tag == "nva-stats")
+            .collect();
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "one snapshot at attach and one at detach, got {}",
+            snapshots.len()
+        );
+        assert!(
+            snapshots[0].text.contains("\"attached\":true"),
+            "the attach snapshot says a window is attached: {}",
+            snapshots[0].text
+        );
+        let detach = snapshots[1];
+        assert!(
+            detach.text.contains("\"attached\":false"),
+            "the detach snapshot must report attached=false: {}",
+            detach.text
+        );
+        assert!(
+            detach.text.contains("\"surface_generation\":3"),
+            "detach keeps the generation the last attach carried: {}",
+            detach.text
+        );
+        assert!(
+            detach.text.contains("\"generation\":3"),
+            "the sticky generation survives detach: {}",
+            detach.text
+        );
+    }
+
+    #[test]
+    fn runtime_detached_submit_signal_names_the_count() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: `app` is live; the window pointer is opaque to the runtime
+        // and the host build never dereferences it.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 640, 480, 4),
+                NVA_OK
+            );
+        }
+        // Inject one submit that arrived after the loop was stopped. On Android
+        // `window.rs` counts this from the render thread; the host build has no
+        // thread, so the test reaches the same private counter directly.
+        // SAFETY: `app` is live and the borrow ends before `destroy`.
+        let app_ref = unsafe { &*app };
+        app_ref.counters.record_detached_submit();
+        // SAFETY: `app` is live and 4 is the generation attached above.
+        assert_eq!(unsafe { nva_app_detach_window(app, 4) }, NVA_OK);
+        destroy(app);
+
+        let lines = logs.take();
+        let signal = lines
+            .iter()
+            .find(|line| {
+                line.tag == "nva-stats" && line.text.contains("\"event\":\"detached_submit\"")
+            })
+            .expect("a detached submit must raise its own signal line");
+        assert!(
+            signal.text.contains("\"count\":1"),
+            "the signal names the number of detached submits: {}",
+            signal.text
+        );
+        assert!(
+            signal.text.contains("\"generation\":4"),
+            "the signal names the generation whose window was detached: {}",
+            signal.text
+        );
+    }
+
+    #[test]
+    fn attach_clears_detached_submit_count() {
+        let logs = LogProbe::default();
+        let platform = log_platform(&logs);
+        let app = create_with_platform(ptr::null(), &platform);
+
+        // SAFETY: `app` is live; the window pointer is opaque to the runtime.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, 0x1000 as *mut c_void, 640, 480, 1),
+                NVA_OK
+            );
+        }
+        // A rotation's old loop can race its stop; that count belongs to the
+        // previous generation and must not leak into the next signal.
+        // SAFETY: `app` is live and the borrow ends before `destroy`.
+        let app_ref = unsafe { &*app };
+        app_ref.counters.record_detached_submit();
+        // SAFETY: as above; generation 2 replaces generation 1.
+        unsafe {
+            assert_eq!(
+                nva_app_attach_window(app, 0x2000 as *mut c_void, 1080, 1920, 2),
+                NVA_OK
+            );
+            assert_eq!(nva_app_detach_window(app, 2), NVA_OK);
+        }
+        destroy(app);
+
+        let lines = logs.take();
+        assert!(
+            !lines.iter().any(|line| {
+                line.tag == "nva-stats" && line.text.contains("\"event\":\"detached_submit\"")
+            }),
+            "the previous generation's detached submit must be cleared on re-attach"
+        );
+    }
+
+    #[test]
+    fn stats_json_fits_the_shell_line() {
+        let app = create(ptr::null());
+        // SAFETY: `app` is live; the borrow ends before `destroy`.
+        let app_ref = unsafe { &*app };
+        // Worst case: the three numeric fields at their type maximum and
+        // `attached:false` (the longer spelling).
+        app_ref.counters.presents.store(u32::MAX, Ordering::Relaxed);
+        app_ref.counters.submits.store(u64::MAX, Ordering::Relaxed);
+        app_ref.last_generation.store(u32::MAX, Ordering::Relaxed);
+        let worst = app_ref.stats_json(false);
+        assert!(
+            worst.len() <= 284,
+            "the object must fit 284 B = 305 B of message room − 21 B of \
+             `[rt] info nva-stats: `; got {} bytes: {worst}",
+            worst.len()
+        );
+        destroy(app);
+    }
+
+    #[test]
     fn a_cold_start_records_each_transition_once() {
         let logs = LogProbe::default();
         let platform = log_platform(&logs);
@@ -1577,7 +1831,13 @@ mod tests {
         }
         destroy(app);
 
-        let lines = logs.take();
+        // The stats snapshots have their own tag and their own test; these
+        // assertions are about the event lines, which all carry `TAG`.
+        let lines: Vec<Logged> = logs
+            .take()
+            .into_iter()
+            .filter(|line| line.tag == "nva-runtime")
+            .collect();
         let said: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
         assert_eq!(
             said,
@@ -1594,10 +1854,6 @@ mod tests {
                 line.level, NVA_LOG_INFO,
                 "transitions are info, got {}: {}",
                 line.level, line.text
-            );
-            assert_eq!(
-                line.tag, "nva-runtime",
-                "every line carries the runtime's tag"
             );
         }
     }
@@ -1624,7 +1880,11 @@ mod tests {
         }
         destroy(app);
 
-        let lines = logs.take();
+        let lines: Vec<Logged> = logs
+            .take()
+            .into_iter()
+            .filter(|line| line.tag == "nva-runtime")
+            .collect();
         let said: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
         assert_eq!(
             said,
@@ -1734,7 +1994,11 @@ mod tests {
         }
         destroy(app);
 
-        let lines = logs.take();
+        let lines: Vec<Logged> = logs
+            .take()
+            .into_iter()
+            .filter(|line| line.tag == "nva-runtime")
+            .collect();
         assert_eq!(lines[1].level, NVA_LOG_ERROR);
         assert_eq!(
             lines[1].text, "detach refused: generation 2 is not the attached one (1)",

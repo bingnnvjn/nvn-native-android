@@ -376,10 +376,6 @@ expect_rc 0 python3 ci/guard/check_doc_refs.py --root "$DUP_REPO"
 # It must fail closed: a missing APK, or a missing Android toolchain, has to
 # exit 2 instead of silently passing. The positive path needs a real APK, so it
 # is exercised by the shell-apk job (and the #46 counter-proof run), not here.
-# #95's runtime-entry and export branches (pass and fail) are covered by the
-# shell-apk job as well; they need both `.so` files, aapt2 and the NDK
-# `llvm-nm`. The two cases below only prove the script fails closed before it
-# reaches those branches (the APK is missing, or aapt2 is absent).
 expect_rc 2 bash ci/guard/check_shell_apk.sh "$TMP/no-such.apk"
 printf 'not an apk\n' >"$TMP/fake.apk"
 expect_rc 2 env ANDROID_HOME=/nonexistent SHELL_NDK_BIN=/nonexistent \

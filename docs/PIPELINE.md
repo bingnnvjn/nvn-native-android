@@ -33,11 +33,9 @@
 | `arm64-linux` | ubuntu-24.04-arm | 同上，`+reserve-x18` | gate/stackgate/TLS/x18/FPCR 契约，10 条断言 | `abi-slice-arm64` |
 | `android-aarch64` | ubuntu-24.04 | NDK r27d 交叉 + aapt2/d8/apksigner | APK 内容扫描、manifest、签名证书、artifact 白名单；C ABI 布局断言 NDK C11 / C++17（#40） | `abi-slice-apk`、`abi-slice-evidence` |
 | `gate` | ubuntu-24.04 | 不编 | 汇总：任一必需 job 非 success 即红 | 无 |
-| `shell-apk` | ubuntu-24.04 | 产品壳 `shell/android/`，无 Gradle（`aapt2`/`d8`/`apksigner`，#46）；#91 起交叉编译并打包 `libnva_runtime.so` | APK 内容扫描（`scan_apk.sh`）、`check_shell_apk.sh`（xmltree 断包名/`minSdk 26`/无 `debuggable`；`llvm-nm -D` 断 `JNI_OnLoad`、运行时库在包内与 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号，#95）、`check_manifest.sh` 的 `product` 模式（证书/ABI/权限/v2+v3） | `shell-apk` |
+| `shell-apk` | ubuntu-24.04 | 产品壳 `shell/android/`，无 Gradle（`aapt2`/`d8`/`apksigner`，#46） | APK 内容扫描（`scan_apk.sh`）、`check_shell_apk.sh`（xmltree 断包名/`minSdk 26`/无 `debuggable` + `llvm-nm -D` 断 `JNI_OnLoad`）、`check_manifest.sh` 的 `product` 模式（证书/ABI/权限/v2+v3） | `shell-apk` |
 
 **为什么 `gate` 单独存在**：分支保护只认一个必需检查时，多 job 的组合态不好表达；`gate` 折成一个状态位。**新增 job 时必须把它的 id 加进 `gate.needs`**，否则启用后仍然是绿的——这条写在这里，因为它是开关，不是摆设。`shell-apk` 已于 #46 加入 `gate.needs`。
-
-**不新增第六腿**：#91 已在既有 `shell-apk` 腿里交叉编译并打包运行时；#95 补齐「运行时库在包内 + 导出符号」断言与文档。needs 集合本票只核实、不改。
 
 **为什么 `guard` 不依赖任何构建**：红线检查必须最快、最便宜，且 PR 上先红。它 `fetch-depth: 0` 扫**全历史**——#16 的教训是「删掉了但历史里还在」同样致命。
 
@@ -110,7 +108,6 @@ runner 镜像都自带，`guard` 直接调用（无 install step），故按可�
 | `minSdk` | 26 | 同上 |
 | `targetSdk` | 34（spike）；产品今天也是 34（#46 沿用 #37 D15）；36 是**待 L6 定**，不是已决 | 同上 |
 | `native-code` | 只有 `arm64-v8a` | 同上 |
-| 运行时库 | `lib/arm64-v8a/libnva_runtime.so` 在包内，且导出 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号（#95） | `check_shell_apk.sh`（`llvm-nm -D --defined-only`） |
 | 权限 | spike 0 个；产品按 L6 白名单（SAF/FGS），逐条审；今天产品 0 个 | 同上 |
 | `debuggable` | spike `true`；产品**属性不存在**（= 默认 `false`） | `check_manifest.sh` 看 badging；`check_shell_apk.sh` 看 xmltree（#46） |
 | 签名 scheme | v2+v3 两条 `true`（v1 在 minSdk 26 下不存在） | `check_manifest.sh` |
@@ -237,7 +234,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
 | `ci/guard/scan_apk.sh` | 条目黑名单、`assets/`、必需条目、体积、绝对路径、`f_<hex>` 符号 | 打印命中条目 |
 | `ci/guard/check_manifest.sh` | 包名/minSdk/targetSdk/ABI/权限/debuggable/签名 scheme/证书指纹 | 打印期望 vs 实际 |
-| `ci/guard/check_shell_apk.sh` | 产品壳（#46）：xmltree 断包名/`minSdk 26`/无 `debuggable`，`llvm-nm -D` 断 `JNI_OnLoad`，断 `lib/` 只有 `arm64-v8a`；#95：断 `libnva_runtime.so` 在包内并断其 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号 | 打印 xmltree 与 APK 条目 |
+| `ci/guard/check_shell_apk.sh` | 产品壳（#46）：xmltree 断包名/`minSdk 26`/无 `debuggable`，`llvm-nm -D` 断 `JNI_OnLoad`，断 `lib/` 只有 `arm64-v8a` | 打印 xmltree 与 APK 条目 |
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |

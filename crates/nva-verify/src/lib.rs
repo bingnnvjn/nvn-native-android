@@ -1,7 +1,8 @@
 //! `nva-verify` — the cross-cutting verifier (`docs/ARCHITECTURE.md` §3.8).
 //!
 //! #42 implements the `loadplan` positive read path; #44 implements the
-//! `smoke` frame path. `rewrite` / `shader` / `hle` / `device` are known but
+//! `smoke` frame path; #94 adds `statslog`, the reader for the device's
+//! `nva-stats` snapshots. `rewrite` / `shader` / `hle` / `device` are known but
 //! unavailable and answer exit code 3 (#43).
 
 #![deny(unsafe_code)]
@@ -12,3 +13,4 @@ pub mod loadplan;
 // the verifier stays safe code.
 #[allow(unsafe_code)]
 pub mod smoke;
+pub mod statslog;
