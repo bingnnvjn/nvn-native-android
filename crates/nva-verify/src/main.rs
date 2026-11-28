@@ -39,6 +39,10 @@ fn run() -> i32 {
                 "       nva-verify device --scenario m0b [--json <out>] \
                  --private-root <path> --m0a-machine-green   (--json omitted: stdout)"
             );
+            eprintln!(
+                "       nva-verify device --from-bundle <zip> [--json <out>] \
+                 --private-root <path>                        (offline acceptance package)"
+            );
             loadplan::EXIT_MISMATCH
         }
     }

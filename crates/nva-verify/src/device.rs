@@ -45,15 +45,15 @@ const PIXEL_RETRY_DELAY: Duration = Duration::from_millis(200);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// A failed pre-step: the exit code the CLI returns and the reason on stderr.
-struct Failure {
-    exit: i32,
-    detail: String,
+pub(crate) struct Failure {
+    pub(crate) exit: i32,
+    pub(crate) detail: String,
     /// Facts observed before the failure, when they must still reach the
     /// evidence JSON (for example a crash that blocks the detach snapshot).
     facts: Option<M0bFacts>,
 }
 
-fn fail(exit: i32, detail: impl Into<String>) -> Failure {
+pub(crate) fn fail(exit: i32, detail: impl Into<String>) -> Failure {
     Failure {
         exit,
         detail: detail.into(),
@@ -76,7 +76,13 @@ struct Options {
 }
 
 /// Entry point called by `main.rs` with the arguments after `device`.
+///
+/// `--from-bundle` switches carriers: the offline acceptance package is judged
+/// by [`crate::bundle`] instead of adb (#109).
 pub fn run_cli(args: &[String]) -> i32 {
+    if args.iter().any(|arg| arg == "--from-bundle") {
+        return crate::bundle::run_cli(args);
+    }
     let mut options = match parse_args(args) {
         Ok(options) => options,
         Err(failure) => {
@@ -194,7 +200,7 @@ const FORBIDDEN_ROOTS: [&str; 3] = ["/mnt", "/media", "/run/media"];
 ///
 /// Returns the canonical path: `--json` containment and the actual writes must
 /// use the same resolved path, or a symlink could move the evidence outside.
-fn ensure_private_root(root: &Path) -> Result<PathBuf, Failure> {
+pub(crate) fn ensure_private_root(root: &Path) -> Result<PathBuf, Failure> {
     if !root.is_dir() {
         return Err(fail(
             EXIT_ORACLE,
@@ -260,7 +266,7 @@ fn ensure_private_root(root: &Path) -> Result<PathBuf, Failure> {
 /// `--json` must land inside the canonical private root. The parent may not
 /// exist yet; the nearest existing ancestor is resolved, so a symlink inside
 /// the root cannot redirect the evidence file elsewhere.
-fn ensure_json_inside_root(json: &Path, root: &Path) -> Result<(), Failure> {
+pub(crate) fn ensure_json_inside_root(json: &Path, root: &Path) -> Result<(), Failure> {
     let parent = json
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -419,7 +425,7 @@ fn installed_apk_sha256(adb: &Adb, apk_path: &str) -> Result<String, Failure> {
     Ok(hash.to_string())
 }
 
-fn is_sha256(text: &str) -> bool {
+pub(crate) fn is_sha256(text: &str) -> bool {
     text.len() == 64 && text.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
@@ -467,20 +473,23 @@ impl Adb {
 }
 
 /// The four M0b judgements of `docs/GATES.md` §4 plus the HOME counter-proof.
+///
+/// Shared with the `--from-bundle` path (#109) so both carriers judge the same
+/// way; see [`verdict_m0b`].
 #[derive(Clone, Copy)]
-struct M0bFacts {
-    surface_generation: u32,
-    presents: u32,
-    pixel: u32,
-    detached_submit: bool,
-    presents_before: u32,
-    presents_after: u32,
-    crashed: bool,
+pub(crate) struct M0bFacts {
+    pub(crate) surface_generation: u32,
+    pub(crate) presents: u32,
+    pub(crate) pixel: u32,
+    pub(crate) detached_submit: bool,
+    pub(crate) presents_before: u32,
+    pub(crate) presents_after: u32,
+    pub(crate) crashed: bool,
 }
 
 impl M0bFacts {
     /// The all-zero facts a failed pre-step records in the evidence JSON.
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         M0bFacts {
             surface_generation: 0,
             presents: 0,
@@ -657,7 +666,7 @@ where
 /// least one present. A 0x0 `surfaceCreated` can attach with `presents:0`
 /// (`docs/DEVICE-LOGS.md` §9); the next `surfaceChanged` attach is the one the
 /// gate reads, so its own `presents:0` must not end the wait.
-fn ready_attach(snapshots: &[Snapshot]) -> Option<Snapshot> {
+pub(crate) fn ready_attach(snapshots: &[Snapshot]) -> Option<Snapshot> {
     snapshots
         .iter()
         .rev()
@@ -691,7 +700,7 @@ fn screencap(adb: &Adb) -> Result<Vec<u8>, Failure> {
 
 /// The `detached_submit` signal is the fourth criterion's evidence, so it is
 /// looked for separately: the stats parser skips it on purpose.
-fn has_detached_submit(logcat: &str) -> bool {
+pub(crate) fn has_detached_submit(logcat: &str) -> bool {
     logcat.lines().any(|line| {
         let Some(start) = line.find('{') else {
             return false;
@@ -728,7 +737,7 @@ fn process_alive(adb: &Adb) -> bool {
 
 /// Why a raw screencap cannot be sampled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PixelError {
+pub(crate) enum PixelError {
     /// The header or its declared length is not a raw frame this reader uses.
     Malformed,
     /// Only RGBA_8888 is decoded; the header names another format.
@@ -743,7 +752,7 @@ enum PixelError {
 /// (`PixelFormat.RGBA_8888`) is decoded — the 4-byte pixel packing and the
 /// `0xff00ff00` expectation both depend on it. An unexpected format is
 /// evidence disagreement (`2`), not a missing device (`3`). No PNG decoding.
-fn centre_pixel(raw: &[u8]) -> Result<u32, PixelError> {
+pub(crate) fn centre_pixel(raw: &[u8]) -> Result<u32, PixelError> {
     if raw.len() < 12 {
         return Err(PixelError::Malformed);
     }
@@ -775,7 +784,7 @@ fn centre_pixel(raw: &[u8]) -> Result<u32, PixelError> {
 
 /// The independent M0b verdict. It checks only `docs/GATES.md` §4's criteria;
 /// in particular, it never looks at llvmpipe or validation availability.
-fn verdict_m0b(facts: &M0bFacts) -> i32 {
+pub(crate) fn verdict_m0b(facts: &M0bFacts) -> i32 {
     if facts.surface_generation != 1 {
         return EXIT_MISMATCH;
     }
@@ -799,7 +808,7 @@ fn verdict_m0b(facts: &M0bFacts) -> i32 {
     EXIT_OK
 }
 
-fn result_word(exit: i32) -> &'static str {
+pub(crate) fn result_word(exit: i32) -> &'static str {
     match exit {
         EXIT_OK => "pass",
         EXIT_MISMATCH => "mismatch",
@@ -808,7 +817,7 @@ fn result_word(exit: i32) -> &'static str {
     }
 }
 
-fn bool_word(flag: bool) -> &'static str {
+pub(crate) fn bool_word(flag: bool) -> &'static str {
     if flag {
         "true"
     } else {
@@ -965,35 +974,68 @@ impl Report {
             hashes.push((name, sha256_file(path)?));
         }
         hashes.sort_by(|left, right| left.0.cmp(&right.0));
-        let hashes = hashes
-            .iter()
-            .map(|(_, hash)| format!("\"{hash}\""))
-            .collect::<Vec<_>>()
-            .join(",");
+        let hashes: Vec<String> = hashes.into_iter().map(|(_, hash)| hash).collect();
 
-        let entry = format!(
-            "{{\"gate\":\"m0b\",\"commit\":{},\"apk_sha256\":{},\"pack_id\":\"none\",\
-             \"run_id\":{},\"ts_utc\":{},\"result\":{},\"evidence_sha256\":[{hashes}]}}\n",
-            json::quote(&self.identity.commit),
-            json::quote(&self.identity.apk_sha256),
-            json::quote(&self.run_id),
-            json::quote(&self.ts_utc),
-            json::quote(result),
-        );
-        let ledger = self.options.private_root.join("gate-ledger.jsonl");
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&ledger)
-            .map_err(|error| format!("cannot open {}: {error}", ledger.display()))?;
-        file.write_all(entry.as_bytes())
-            .map_err(|error| format!("cannot append {}: {error}", ledger.display()))?;
-        Ok(())
+        append_ledger(
+            &self.options.private_root,
+            &LedgerEntry {
+                commit: &self.identity.commit,
+                apk_sha256: &self.identity.apk_sha256,
+                run_id: &self.run_id,
+                ts_utc: &self.ts_utc,
+                result,
+                evidence_sha256: &hashes,
+            },
+        )
     }
 }
 
+/// One `gate-ledger.jsonl` line. The key order is the documented schema (GATES
+/// §1): `gate`, `commit`, `apk_sha256`, `pack_id`, `run_id`, `ts_utc`,
+/// `result`, `evidence_sha256`.
+pub(crate) struct LedgerEntry<'a> {
+    pub(crate) commit: &'a str,
+    pub(crate) apk_sha256: &'a str,
+    pub(crate) run_id: &'a str,
+    pub(crate) ts_utc: &'a str,
+    pub(crate) result: &'a str,
+    /// Evidence digests already ordered by evidence file name.
+    pub(crate) evidence_sha256: &'a [String],
+}
+
+/// Appends one entry to the private ledger.
+///
+/// Shared by `device` and `device --from-bundle` (#109) so both carriers write
+/// the same eight-key line; the bundle path passes the evidence's own commit and
+/// run id instead of the verifier's.
+pub(crate) fn append_ledger(private_root: &Path, entry: &LedgerEntry<'_>) -> Result<(), String> {
+    let hashes = entry
+        .evidence_sha256
+        .iter()
+        .map(|hash| format!("\"{hash}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let line = format!(
+        "{{\"gate\":\"m0b\",\"commit\":{},\"apk_sha256\":{},\"pack_id\":\"none\",\
+         \"run_id\":{},\"ts_utc\":{},\"result\":{},\"evidence_sha256\":[{hashes}]}}\n",
+        json::quote(entry.commit),
+        json::quote(entry.apk_sha256),
+        json::quote(entry.run_id),
+        json::quote(entry.ts_utc),
+        json::quote(entry.result),
+    );
+    let ledger = private_root.join("gate-ledger.jsonl");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ledger)
+        .map_err(|error| format!("cannot open {}: {error}", ledger.display()))?;
+    file.write_all(line.as_bytes())
+        .map_err(|error| format!("cannot append {}: {error}", ledger.display()))
+}
+
 /// SHA-256 through the system `sha256sum`; the workspace has no hash crate.
-fn sha256_file(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
     let output = Command::new("sha256sum")
         .arg("--")
         .arg(path)
@@ -1011,7 +1053,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     }
 }
 
-fn utc_now() -> (String, String) {
+pub(crate) fn utc_now() -> (String, String) {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
