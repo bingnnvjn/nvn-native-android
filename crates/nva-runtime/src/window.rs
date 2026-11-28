@@ -97,6 +97,15 @@ const WANTED_COLOR_SPACE: vk::ColorSpaceKHR = vk::ColorSpaceKHR::SRGB_NONLINEAR;
 /// cap is the backstop for a future note that a driver can repeat.
 const MAX_NOTES: usize = 4;
 
+/// The two `ANativeWindow` calls the engine's own reference needs.
+///
+/// `#[link(name = "android")]` on this block is what puts `libandroid.so` in
+/// the `.so`'s `DT_NEEDED` — it lives here, on the android-only module, because
+/// the workspace gate (`ci/guard/check_workspace.sh`, #39) forbids any
+/// Android reference in a member's build script, and a `build.rs` link
+/// directive would trip it. On every other target this module does not exist,
+/// so the link argument never reaches a host build.
+#[link(name = "android")]
 extern "C" {
     fn ANativeWindow_acquire(window: *mut c_void);
     fn ANativeWindow_release(window: *mut c_void);
