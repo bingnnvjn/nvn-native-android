@@ -290,7 +290,7 @@ adb logcat -d -s nva-stats          # run 之后只取快照
 | 条目 | 内容 |
 |---|---|
 | `m0b.json` | 身份字段、`m0a_machine_green`、attach/detach 计数、`pixel_rgba`、`pixel_sampled` / `pixel_error`、`detached_submit`、`crashed`、`evidence`（`partial` / `complete`）、`run_id`、`ts_utc` |
-| `screen.raw` | `u32 width / u32 height / u32 format(=1 RGBA_8888)` + 每像素 ARGB int 的小端 4 字节（字节序为 B,G,R,A）；PC 取窗口中心，按 u32 小端读回 ARGB |
+| `screen.raw` | **16 字节**：`u32 width=1 / u32 height=1 / u32 format=1` + 窗口中心像素的 ARGB int 小端 4 字节（字节序 B,G,R,A）。只写中心像素，不复制整帧（1080×2400 的整帧拷贝是 ~10 MB 分配，真机上失败过）；PC 按 u32 小端读回 ARGB。 |
 | `nva-shell.log` | §3–§9 的同一份文件；PC 只解析**最后一个 `=== run`** 之后的快照（跨 run 计数会归零） |
 | `sha256.txt` | `<hex>  <文件名>`，按文件名升序；PC 用系统 `sha256sum` 逐项校验 |
 
@@ -302,10 +302,14 @@ nva-verify device --from-bundle <zip> --private-root <path> [--json <out>]
 
 - 解 zip 用系统 `unzip -p`（绝对路径 + 校验过的条目名 + `--`，兼容不支持
   `--` 的 busybox 时重试）；校验用系统 `sha256sum`（两者不可用 → 退 `3`）。
-- 退出码：`0` 通过；`2` 证据不符（坏 JSON / 缺字段 / `pixel_sampled=false` /
-  `pixel_rgba` 与 `screen.raw` 中心不一致 / 像素不是绿 / 无 attach 或 detach
-  快照 / 有 `detached_submit`）；`4` bundle 过期（缺条目、sha 不符、zip 不可读、
+- 退出码：`0` 通过；`2` 证据不符（坏 JSON / 缺字段 / `evidence` 不是
+  `complete` / 带 `log_error` / `pixel_sampled=false` / `pixel_rgba` 与
+  `screen.raw` 中心不一致 / 像素不是绿 / 无 attach 或 detach 快照 / 有
+  `detached_submit`）；`4` bundle 过期（缺条目、sha 不符、zip 不可读、
   `sha256.txt` 未恰好列三项）。
+- **日志缺失/为空不许当正常**：分享前检查 `nva-shell.log` 存在、非空、有
+  `=== run` 头、且含本次 `acceptance run <run_id>` 行；任一不满足就把
+  `m0b.json` 的 `evidence` 改成 `partial` 并写 `log_error`，PC 据此退 `2`。
 - **旧帧不能冒充新 run**：应用每次点「开始」先删旧的 `m0b.json` / `screen.raw` /
   `sha256.txt`，分享后删 raw/log；PC 另外要求 `pixel_sampled=true` 且
   `pixel_rgba` 与 `screen.raw` 的窗口中心一致，否则退 `2`。

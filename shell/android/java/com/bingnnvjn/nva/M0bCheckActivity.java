@@ -210,6 +210,10 @@ public class M0bCheckActivity extends Activity {
         // a run that fails to sample would still ship an old green raw and the
         // PC could call it green; `pixel_sampled` alone would only catch it if
         // the JSON were also fresh.
+        // `nva-shell.log` is deliberately not deleted here: appCreate opens it
+        // and writes this run's header, and the share path refuses a log that
+        // does not name this run. Deleting it would remove the only writer's
+        // target.
         deleteEvidenceFile(EVIDENCE_JSON);
         deleteEvidenceFile(EVIDENCE_RAW);
         deleteEvidenceFile("sha256.txt");
@@ -414,14 +418,17 @@ public class M0bCheckActivity extends Activity {
         }
     }
 
-    private void writeFile(String name, byte[] bytes) {
+    /** Writes one evidence file; false means the bytes did not reach the disk. */
+    private boolean writeFile(String name, byte[] bytes) {
         File file = new File(getFilesDir(), name);
         FileOutputStream out = null;
         try {
             out = new FileOutputStream(file);
             out.write(bytes);
+            return true;
         } catch (IOException e) {
             note("evidence write failed for " + name + ": " + e);
+            return false;
         } finally {
             closeQuietly(out);
         }
@@ -478,10 +485,8 @@ public class M0bCheckActivity extends Activity {
             }
         }
         if (attempt >= PRESENT_ATTEMPTS) {
-            recordPixelFailure("no present within " + (PRESENT_ATTEMPTS
+            finishPixelAttempt(null, "no present within " + (PRESENT_ATTEMPTS
                     * PRESENT_RETRY_MS) + " ms");
-            writeRaw(null);
-            finishPixelPhase();
             return;
         }
         handler.postDelayed(new RetryFirstFrame(attempt + 1), PRESENT_RETRY_MS);
@@ -508,27 +513,21 @@ public class M0bCheckActivity extends Activity {
         int width = surfaceView.getWidth() > 0 ? surfaceView.getWidth() : attachedWidth;
         int height = surfaceView.getHeight() > 0 ? surfaceView.getHeight() : attachedHeight;
         if (width <= 0 || height <= 0) {
-            recordPixelFailure("surface has no size for PixelCopy");
-            writeRaw(null);
-            finishPixelPhase();
+            finishPixelAttempt(null, "surface has no size for PixelCopy");
             return;
         }
         Bitmap bitmap;
         try {
             bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         } catch (Throwable t) {
-            recordPixelFailure("bitmap allocation failed: " + t);
-            writeRaw(null);
-            finishPixelPhase();
+            finishPixelAttempt(null, "bitmap allocation failed: " + t);
             return;
         }
         try {
             PixelCopy.request(surfaceView, bitmap, new CopyFinished(bitmap), handler);
         } catch (Throwable t) {
             // The callback will not run; finish the phase here.
-            recordPixelFailure("PixelCopy request failed: " + t);
-            writeRaw(bitmap);
-            finishPixelPhase();
+            finishPixelAttempt(bitmap, "PixelCopy request failed: " + t);
         }
     }
 
@@ -545,22 +544,47 @@ public class M0bCheckActivity extends Activity {
                 return;
             }
             if (result == PixelCopy.SUCCESS) {
-                int width = bitmap.getWidth();
-                int height = bitmap.getHeight();
-                int[] argb = new int[width * height];
-                bitmap.getPixels(argb, 0, width, 0, 0, width, height);
-                pixel = argb[(height / 2) * width + (width / 2)];
+                pixel = bitmap.getPixel(bitmap.getWidth() / 2, bitmap.getHeight() / 2);
                 pixelSampled = true;
                 pixelError = null;
                 note("acceptance pixel sampled 0x" + String.format(Locale.US, "%08x", pixel));
+                finishPixelAttempt(bitmap, null);
             } else {
                 // A black or failed copy is recorded, never called green. The
-                // PC verifier compares the raw frame and exits 2.
-                recordPixelFailure("PixelCopy result " + result);
+                // PC verifier compares the raw centre and exits 2.
+                finishPixelAttempt(bitmap, "PixelCopy result " + result);
             }
-            writeRaw(bitmap);
+        }
+    }
+
+    /**
+     * Writes the raw centre and finishes the phase, whatever happened. A raw
+     * write failure downgrades the run to unsampled: the frame was not stored,
+     * so the PC must not be handed a green claim it cannot verify.
+     */
+    private void finishPixelAttempt(Bitmap bitmap, String failure) {
+        if (failure != null) {
+            recordPixelFailure(failure);
+        }
+        try {
+            if (!writeRaw(bitmap)) {
+                recordRawFailure("raw write failed");
+            }
+        } catch (Throwable t) {
+            recordRawFailure("raw write failed: " + t);
+        } finally {
             finishPixelPhase();
         }
+    }
+
+    /** Keeps the first (more specific) failure when the raw write also fails. */
+    private void recordRawFailure(String reason) {
+        pixelSampled = false;
+        pixel = 0;
+        if (pixelError == null) {
+            pixelError = reason;
+        }
+        note("acceptance " + reason);
     }
 
     /**
@@ -580,47 +604,46 @@ public class M0bCheckActivity extends Activity {
             return;
         }
         writeEvidence("partial");
-        if (pixelSampled) {
-            prompt.setText("请按一次 HOME 键结束采集");
-        } else {
-            prompt.setText("像素采集失败，仍请按 HOME 结束");
+        try {
+            if (pixelSampled) {
+                prompt.setText("请按一次 HOME 键结束采集");
+            } else {
+                prompt.setText("像素采集失败，仍请按 HOME 结束");
+            }
+        } catch (Throwable t) {
+            note("prompt update failed: " + t);
         }
     }
 
     /**
-     * Copies the frame into the app's raw format: {@code u32 width, u32 height,
-     * u32 format = 1} followed by each pixel as an ARGB int in little-endian
-     * byte order. Android's ARGB int packs A<<24|R<<16|G<<8|B, so the four
-     * bytes are B, G, R, A; a little-endian u32 read of them gives the ARGB
-     * value back, which is what {@code centre_pixel} compares with
-     * {@code 0xff00ff00}.
+     * Writes the window centre pixel in the app's raw format: {@code u32
+     * width = 1, u32 height = 1, u32 format = 1}, then the pixel's ARGB int as
+     * a little-endian u32 (bytes B, G, R, A). Sixteen bytes is all the gate
+     * reads.
+     *
+     * <p>The full frame is deliberately not copied: a 1080x2400 {@code int[]}
+     * plus a same-size buffer is a ~10 MB allocation on the PixelCopy callback
+     * and can fail on a phone. The first device run produced exactly that
+     * failure and left a placeholder raw.
+     *
+     * <p>Returns false when the bytes did not reach the disk, so the caller can
+     * mark the pixel unsampled instead of reporting green it never stored.
      */
-    private void writeRaw(Bitmap bitmap) {
-        if (bitmap == null) {
-            ByteBuffer empty = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
-            empty.putInt(1);
-            empty.putInt(1);
-            empty.putInt(1);
-            empty.putInt(0);
-            writeFile(EVIDENCE_RAW, empty.array());
-            return;
+    private boolean writeRaw(Bitmap bitmap) {
+        int argb = 0;
+        if (bitmap != null) {
+            int width = bitmap.getWidth();
+            int height = bitmap.getHeight();
+            if (width > 0 && height > 0) {
+                argb = bitmap.getPixel(width / 2, height / 2);
+            }
         }
-        int width = bitmap.getWidth();
-        int height = bitmap.getHeight();
-        int[] argb = new int[width * height];
-        bitmap.getPixels(argb, 0, width, 0, 0, width, height);
-        ByteBuffer buffer = ByteBuffer.allocate(12 + width * height * 4)
-                .order(ByteOrder.LITTLE_ENDIAN);
-        buffer.putInt(width);
-        buffer.putInt(height);
+        ByteBuffer buffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
         buffer.putInt(1);
-        for (int value : argb) {
-            buffer.put((byte) (value & 0xff));
-            buffer.put((byte) ((value >> 8) & 0xff));
-            buffer.put((byte) ((value >> 16) & 0xff));
-            buffer.put((byte) ((value >> 24) & 0xff));
-        }
-        writeFile(EVIDENCE_RAW, buffer.array());
+        buffer.putInt(1);
+        buffer.putInt(1);
+        buffer.putInt(argb);
+        return writeFile(EVIDENCE_RAW, buffer.array());
     }
 
     /**
@@ -724,13 +747,51 @@ public class M0bCheckActivity extends Activity {
         }
         File dir = activity.getFilesDir();
         try {
-            File evidence = ensureFile(dir, EVIDENCE_JSON, "{}".getBytes(StandardCharsets.UTF_8));
-            File raw = ensureFile(dir, EVIDENCE_RAW, placeholderRaw());
-            File log = ensureFile(dir, EVIDENCE_LOG, new byte[0]);
-
+            File evidence = new File(dir, EVIDENCE_JSON);
             byte[] evidenceBytes = readAll(evidence);
-            byte[] rawBytes = readAll(raw);
-            byte[] logBytes = readAll(log);
+
+            JSONObject json = null;
+            String runId = null;
+            try {
+                json = new JSONObject(new String(evidenceBytes, StandardCharsets.UTF_8));
+                String value = json.optString("run_id", "");
+                if (!value.isEmpty()) {
+                    runId = value;
+                }
+            } catch (Throwable t) {
+                Log.i(TAG, "cannot parse m0b.json for the log check: " + t);
+            }
+
+            File log = new File(dir, EVIDENCE_LOG);
+            String logError = logProblem(log, runId);
+            if (logError != null) {
+                // Never silently ship an empty log as if it were evidence. Mark
+                // the JSON partial and record why; the PC rejects it and the
+                // reason stays in the archive for the operator.
+                Log.i(TAG, "bundle log problem: " + logError);
+                if (json != null) {
+                    try {
+                        json.put("evidence", "partial");
+                        json.put("log_error", logError);
+                        evidenceBytes = json.toString().getBytes(StandardCharsets.UTF_8);
+                        FileOutputStream out = new FileOutputStream(evidence);
+                        try {
+                            out.write(evidenceBytes);
+                        } finally {
+                            out.close();
+                        }
+                    } catch (Throwable t) {
+                        Log.i(TAG, "cannot record the log problem in m0b.json: " + t);
+                    }
+                }
+            }
+
+            // A missing raw is still included as the 1x1 black placeholder so
+            // the manifest lists exactly three files; the PC's cross-check of
+            // pixel_rgba against the raw centre then refuses green.
+            File rawFile = new File(dir, EVIDENCE_RAW);
+            byte[] rawBytes = rawFile.isFile() ? readAll(rawFile) : placeholderRaw();
+            byte[] logBytes = log.isFile() ? readAll(log) : new byte[0];
 
             // Sorted by file name, the order the ledger and the verifier use.
             String manifest =
@@ -741,23 +802,43 @@ public class M0bCheckActivity extends Activity {
             File zip = new File(dir, EvidenceProvider.NAME);
             writeZip(zip, evidenceBytes, rawBytes, logBytes, manifest);
             shareZip(activity);
+            // The source files may only go after the zip is written and handed
+            // to the chooser; deleting them earlier would empty the package.
             markSent(evidence);
         } catch (Throwable t) {
             Log.i(TAG, "bundle share failed: " + t);
         }
     }
 
-    private static File ensureFile(File dir, String name, byte[] fallback) throws IOException {
-        File file = new File(dir, name);
-        if (!file.isFile()) {
-            FileOutputStream out = new FileOutputStream(file);
-            try {
-                out.write(fallback);
-            } finally {
-                out.close();
-            }
+    /**
+     * Why the shell log cannot be shipped as evidence, or {@code null} when it
+     * is present, non-empty, has a run header, and names this run. The app logs
+     * one {@code acceptance run <run_id> on ...} line after {@code appCreate},
+     * which is what ties the file to the evidence being shared.
+     */
+    private static String logProblem(File log, String runId) {
+        if (!log.isFile()) {
+            return EVIDENCE_LOG + " is missing";
         }
-        return file;
+        if (log.length() == 0) {
+            return EVIDENCE_LOG + " is empty";
+        }
+        String text;
+        try {
+            text = new String(readAll(log), StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return EVIDENCE_LOG + " is unreadable: " + t;
+        }
+        if (!text.contains("=== run ")) {
+            return EVIDENCE_LOG + " has no run header";
+        }
+        if (runId == null) {
+            return "m0b.json has no run_id; the log cannot be tied to this run";
+        }
+        if (!text.contains("acceptance run " + runId)) {
+            return EVIDENCE_LOG + " has no line for run " + runId;
+        }
+        return null;
     }
 
     private static byte[] placeholderRaw() {

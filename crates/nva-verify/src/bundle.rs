@@ -339,6 +339,24 @@ impl Report {
         self.run_id = required_string(&value, "run_id")?;
         self.ts_utc = required_string(&value, "ts_utc")?;
         self.facts.crashed = required_bool(&value, "crashed")?;
+        // Only a run the app itself finished is evidence. A partial run (HOME
+        // before the pixel, a missing log, or a crash the app survived) cannot
+        // be judged as a pass, even if the counters happen to look right.
+        let phase = required_string(&value, "evidence")?;
+        if phase != "complete" {
+            return Err(fail(
+                EXIT_MISMATCH,
+                format!("m0b.json evidence is {phase:?}, not \"complete\"; the run did not finish"),
+            ));
+        }
+        if let Some(message) = value.get("log_error").and_then(Value::as_str) {
+            if !message.is_empty() {
+                return Err(fail(
+                    EXIT_MISMATCH,
+                    format!("m0b.json records a log problem: {message}"),
+                ));
+            }
+        }
         self.pixel_sampled = required_bool(&value, "pixel_sampled")?;
         let pixel_rgba = required_string(&value, "pixel_rgba")?;
         self.recorded_pixel = parse_pixel_rgba(&pixel_rgba).ok_or_else(|| {

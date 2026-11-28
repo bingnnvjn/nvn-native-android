@@ -181,6 +181,10 @@ fn evidence_json(model: &str) -> Vec<u8> {
 }
 
 fn evidence_json_fields(model: &str, pixel_sampled: bool, pixel_rgba: &str) -> Vec<u8> {
+    evidence_json_full(model, pixel_sampled, pixel_rgba, "complete")
+}
+
+fn evidence_json_full(model: &str, pixel_sampled: bool, pixel_rgba: &str, phase: &str) -> Vec<u8> {
     format!(
         "{{\"scenario\":\"m0b\",\"source\":\"app\",\
          \"commit\":\"{}\",\"apk_sha256\":\"{}\",\"pack_id\":\"none\",\
@@ -189,12 +193,14 @@ fn evidence_json_fields(model: &str, pixel_sampled: bool, pixel_rgba: &str) -> V
          \"run_id\":\"20261128T120000Z-1234\",\"ts_utc\":\"2026-11-28T12:00:00Z\",\
          \"m0a_machine_green\":true,\"surface_generation\":1,\"presents\":1,\
          \"pixel_rgba\":{},\"pixel_sampled\":{},\
-         \"surface_destroyed_still_submitting\":false,\"crashed\":false}}",
+         \"surface_destroyed_still_submitting\":false,\"crashed\":false,\
+         \"evidence\":{}}}",
         "0123456789abcdef0123456789abcdef01234567",
         "a".repeat(64),
         quote(model),
         quote(pixel_rgba),
         pixel_sampled,
+        quote(phase),
     )
     .into_bytes()
 }
@@ -888,6 +894,56 @@ fn bundle_retains_evidence_in_private_root() {
     assert_eq!(
         retained_evidence, evidence,
         "the retained m0b.json is the bundle's bytes"
+    );
+}
+
+#[test]
+fn bundle_empty_log_exits_2() {
+    let root = TempDir::new("empty-log-root");
+    let work = TempDir::new("empty-log-work");
+    let evidence = evidence_json("Fake Model");
+    let raw = raw_frame(GREEN_PIXEL);
+    let log: Vec<u8> = Vec::new();
+    let files: Vec<(&str, &[u8])> = vec![
+        ("m0b.json", &evidence),
+        ("screen.raw", &raw),
+        ("nva-shell.log", &log),
+    ];
+    let bundle = write_bundle(work.path(), &evidence, &raw, &log, &files);
+
+    let output = run_bundle(root.path(), &bundle, None);
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(code, 2, "an empty log has no snapshots; stderr: {stderr}");
+    assert!(
+        stderr.contains("attach snapshot") || stderr.contains("nva-stats"),
+        "the reason must name the missing snapshot; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn bundle_partial_evidence_exits_2() {
+    let root = TempDir::new("partial-root");
+    let work = TempDir::new("partial-work");
+    // Everything else looks green; the app marked the run partial (for
+    // example a missing log), so it must not be accepted as a pass.
+    let evidence = evidence_json_full("Fake Model", true, "0xff00ff00", "partial");
+    let raw = raw_frame(GREEN_PIXEL);
+    let log = format!("{RUN_HEADER}{ATTACH_SNAPSHOT}{DETACH_SNAPSHOT}").into_bytes();
+    let files: Vec<(&str, &[u8])> = vec![
+        ("m0b.json", &evidence),
+        ("screen.raw", &raw),
+        ("nva-shell.log", &log),
+    ];
+    let bundle = write_bundle(work.path(), &evidence, &raw, &log, &files);
+
+    let output = run_bundle(root.path(), &bundle, None);
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(code, 2, "a partial run is not a pass; stderr: {stderr}");
+    assert!(
+        stderr.contains("partial") || stderr.contains("did not finish"),
+        "the reason must name the partial state; stderr: {stderr}"
     );
 }
 
