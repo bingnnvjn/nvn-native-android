@@ -48,6 +48,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # D18: judge the PR with the base branch's guards, so a PR cannot weaken
+      # the check that judges it. The layout inventory is data, not shell: a
+      # legitimate ABI append rewrites it, so it is checked for a shrinking
+      # total instead of by running the base script against the PR tree.
+      - name: Guard base rules (PR only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          pr_total=$(awk '$1 == "total" {print $2}' ci/guard/layout-assertions.txt)
+          git checkout "$BASE_SHA" -- ci/guard
+          trap 'git checkout -f HEAD -- ci/guard; git clean -fdq -- ci/guard' EXIT
+          base_total=$(awk '$1 == "total" {print $2}' ci/guard/layout-assertions.txt)
+          if (( pr_total < base_total )); then
+            echo "guard-base: layout assertion total shrank: $base_total -> $pr_total" >&2
+            exit 1
+          fi
+          bash ci/guard/test_guards.sh
+          bash ci/guard/scan_tree.sh
+          bash ci/guard/check_header_collision.sh
+          python3 ci/guard/check_doc_refs.py
+          python3 ci/guard/check_derived_ledger.py
+          bash ci/guard/check_docs.sh
+
       - name: Guard self-tests
         run: bash ci/guard/test_guards.sh
 
