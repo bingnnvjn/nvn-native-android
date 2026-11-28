@@ -80,7 +80,18 @@ struct Options {
 /// `--from-bundle` switches carriers: the offline acceptance package is judged
 /// by [`crate::bundle`] instead of adb (#109).
 pub fn run_cli(args: &[String]) -> i32 {
-    if args.iter().any(|arg| arg == "--from-bundle") {
+    let from_bundle = args.iter().any(|arg| arg == "--from-bundle");
+    if from_bundle {
+        // The two carriers are not composable: `--scenario` drives adb and
+        // `--from-bundle` reads a zip. Asking for both is a usage error, not a
+        // silent preference for one of them.
+        if args.iter().any(|arg| arg == "--scenario") {
+            eprintln!(
+                "device: --scenario and --from-bundle are mutually exclusive; \
+                 pick one carrier"
+            );
+            return EXIT_MISMATCH;
+        }
         return crate::bundle::run_cli(args);
     }
     let mut options = match parse_args(args) {

@@ -122,7 +122,7 @@ Java 侧的行走 `nativeLog`，同样进文件、同样进 logcat。Java 自己
 | 字段 | 来源 |
 |---|---|
 | 日志路径 | Java `appCreate(String)` 的参数（`getFilesDir()` 的绝对路径）；同一个指针也原样填进 `nva_app_desc.data_dir` 交给运行时。**没有新增 ABI 字段** |
-| `generation` | Java 侧 `MainActivity` 计数：`surfaceCreated` 加一，几何真的变了才加一，`surfaceDestroyed` 不加（§3.7） |
+| `generation` | 壳的 generation 计数（`MainActivity` 与 `M0bCheckActivity` 共用同一规则）：`surfaceCreated` 加一，几何真的变了才加一，`surfaceDestroyed` 不加（§3.7） |
 | `WxH` | `windowAttached` 的入参，不是从 holder 现读的 |
 | `status` | 这次调用的返回码；非 0 的取值定义在 `include/nva_abi.h`，0 = 成功。三个入口没有可报告的返回值（`shellInfo` 返回字符串，`appDestroy` 底下的 `nva_app_destroy` 返回 void），它们的行恒记 0，含义是「入口正常返回」 |
 
@@ -290,7 +290,7 @@ adb logcat -d -s nva-stats          # run 之后只取快照
 | 条目 | 内容 |
 |---|---|
 | `m0b.json` | 身份字段、`m0a_machine_green`、attach/detach 计数、`pixel_rgba`、`pixel_sampled` / `pixel_error`、`detached_submit`、`crashed`、`evidence`（`partial` / `complete`）、`run_id`、`ts_utc` |
-| `screen.raw` | `u32 width / u32 height / u32 format(=1 RGBA_8888)` + RGBA_8888 像素；PC 取窗口中心 |
+| `screen.raw` | `u32 width / u32 height / u32 format(=1 RGBA_8888)` + 每像素 ARGB int 的小端 4 字节（字节序为 B,G,R,A）；PC 取窗口中心，按 u32 小端读回 ARGB |
 | `nva-shell.log` | §3–§9 的同一份文件；PC 只解析**最后一个 `=== run`** 之后的快照（跨 run 计数会归零） |
 | `sha256.txt` | `<hex>  <文件名>`，按文件名升序；PC 用系统 `sha256sum` 逐项校验 |
 
@@ -300,13 +300,20 @@ adb logcat -d -s nva-stats          # run 之后只取快照
 nva-verify device --from-bundle <zip> --private-root <path> [--json <out>]
 ```
 
-- 解 zip 用系统 `unzip -p`；校验用系统 `sha256sum`（两者不可用 → 退 `3`）。
-- 退出码：`0` 通过；`2` 证据不符（坏 JSON / 缺字段 / 像素不符 / 无 attach 或
-  detach 快照 / 有 `detached_submit`）；`4` bundle 过期（缺条目、sha 不符、zip
-  不可读、`sha256.txt` 未恰好列三项）。
+- 解 zip 用系统 `unzip -p`（绝对路径 + 校验过的条目名 + `--`，兼容不支持
+  `--` 的 busybox 时重试）；校验用系统 `sha256sum`（两者不可用 → 退 `3`）。
+- 退出码：`0` 通过；`2` 证据不符（坏 JSON / 缺字段 / `pixel_sampled=false` /
+  `pixel_rgba` 与 `screen.raw` 中心不一致 / 像素不是绿 / 无 attach 或 detach
+  快照 / 有 `detached_submit`）；`4` bundle 过期（缺条目、sha 不符、zip 不可读、
+  `sha256.txt` 未恰好列三项）。
+- **旧帧不能冒充新 run**：应用每次点「开始」先删旧的 `m0b.json` / `screen.raw` /
+  `sha256.txt`，分享后删 raw/log；PC 另外要求 `pixel_sampled=true` 且
+  `pixel_rgba` 与 `screen.raw` 的窗口中心一致，否则退 `2`。
+- **证据留存**：解出的三个文件复制到
+  `<private-root>/evidence/109/<run_id>/`；台账 `evidence_sha256[]` 用**复制后**
+  的文件按文件名升序计算，事后可复核。
 - `--json` 必须在私有根内（否则退 `3`）；台账写同一 8 键，`commit` /
-  `apk_sha256` / `run_id` / `ts_utc` 用 bundle 携带的值，`evidence_sha256[]`
-  是三项证据按文件名升序的摘要。
+  `apk_sha256` / `run_id` / `ts_utc` 用 bundle 携带的值。
 - **PixelCopy 结论**：窗口中心在真机上是否拿到 `0xff00ff00` 由 boss 的 [H]
   运行决定。失败时 `m0b.json` 记 `pixel_error`、`screen.raw` 仍是可判定的帧
   （PC 退 `2`），不把黑帧当绿。若真机确认 PixelCopy 不可用，切 MediaProjection

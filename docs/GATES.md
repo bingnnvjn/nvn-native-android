@@ -23,7 +23,7 @@
 | `apk_sha256` | `adb shell pm path <pkg>` 去掉 `package:` 前缀后 `sha256sum`，取回本地比对 |
 | `pack_id` / `build_id` | 读机上 pack 的 `manifest.json`，与 `nva-pack verify` 输出比对 |
 | `device_model` / `driver_version` / `vulkan_api` / `page_size` | `getprop` / `dumpsys SurfaceFlinger` / `getconf PAGE_SIZE` |
-| `run_id` / `ts_utc` | verifier 生成，写进 JSON，并作为证据文件名 |
+| `run_id` / `ts_utc` | device 载体由 verifier 生成，写进 JSON，并作为证据文件名；bundle 载体取自 `m0b.json`（应用生成，见下一条） |
 
 - **应用内 bundle 的来源（#109）**：载体是 `--from-bundle` 时，`commit`（构建时嵌入）、`apk_sha256`（应用读 `sourceDir` 自算）、`device_model` / `page_size`、`run_id` / `ts_utc` 取自 zip 内的 `m0b.json`；`pack_id` / `build_id` 记 `none`，`driver_version` / `vulkan_api` 记 `unknown`（不新增 ABI 导出）。身份字段仍是现场取，只是改为在设备上的应用内现场取；判据值与判定逻辑不变（同一 `verdict_m0b`、同一台账写入器）。
 - **注入对照**：每个 `= 0` 的计数，必须在**同一次 scenario run** 内带 `injection{name,before,after}` 且 `delta ≥ 1`；注入在测量之前完成，测量窗口内不带注入。
@@ -97,7 +97,7 @@ for p in nva_app_ nva_gfx_ nva_host_; do
 done
 ```
 
-- 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。产品壳这两条在 `shell-apk` job 的 `ci/guard/check_shell_apk.sh`（#46）；spike 侧今天只有 `scan_apk.sh` 与 `check_manifest.sh`（artifact 模式，允许 debuggable），没有这两条断言。
+- 壳：`aapt2 dump xmltree --file AndroidManifest.xml` 断言包名、`minSdk 26`、`debuggable=false`；`llvm-nm -D` 断言 `JNI_OnLoad`。产品壳这两条在 `shell-apk` job 的 `ci/guard/check_shell_apk.sh`（#46）；同一脚本在 #109 还断言验收组件：`M0bCheckActivity` 与 `EvidenceProvider` 均 `exported=false`，且 provider 声明 `grantUriPermissions=true`；spike 侧今天只有 `scan_apk.sh` 与 `check_manifest.sh`（artifact 模式，允许 debuggable），没有这些断言。
 - spike 树不含与产品 `include/` 同名的文件（见 §2.2）；该断言在 `guard` job。
 - 布局断言四条全部进 CI：宿主 C11 / C++17 在 `pc-x86_64`，NDK C11 / C++17 在 `android-aarch64`；其余命令并入 `pc-x86_64`（#45 接线）；壳/APK 断言已就位（`shell-apk` 于 #46 启用并入 `gate.needs`）。任一条失败必须让 `gate` 红。
 - `pc-x86_64` 另外承载 L0/L1 的合成 fixture 回归（`nva-pack verify`、`nva-verify rewrite`，接线见 #74）：**不属 M0a 判据**，红了同 job 红，按 step 名区分。M0a 的判据仍是上面那张命令块。

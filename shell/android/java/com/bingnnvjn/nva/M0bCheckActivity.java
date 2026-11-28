@@ -206,6 +206,14 @@ public class M0bCheckActivity extends Activity {
      * evidence does not carry the time the declaration screen was merely open.
      */
     private void startAcceptance() {
+        // A new run must not inherit a previous frame or JSON. Without this,
+        // a run that fails to sample would still ship an old green raw and the
+        // PC could call it green; `pixel_sampled` alone would only catch it if
+        // the JSON were also fresh.
+        deleteEvidenceFile(EVIDENCE_JSON);
+        deleteEvidenceFile(EVIDENCE_RAW);
+        deleteEvidenceFile("sha256.txt");
+
         runId = utcStamp("yyyyMMdd'T'HHmmss'Z'") + "-" + android.os.Process.myPid();
         tsUtc = utcStamp("yyyy-MM-dd'T'HH:mm:ss'Z'");
         collectIdentity();
@@ -399,6 +407,13 @@ public class M0bCheckActivity extends Activity {
         writeFile(EVIDENCE_JSON, json.toString().getBytes(StandardCharsets.UTF_8));
     }
 
+    private void deleteEvidenceFile(String name) {
+        File file = new File(getFilesDir(), name);
+        if (file.exists() && !file.delete()) {
+            note("evidence cleanup failed for " + name);
+        }
+    }
+
     private void writeFile(String name, byte[] bytes) {
         File file = new File(getFilesDir(), name);
         FileOutputStream out = null;
@@ -574,9 +589,11 @@ public class M0bCheckActivity extends Activity {
 
     /**
      * Copies the frame into the app's raw format: {@code u32 width, u32 height,
-     * u32 format = 1} followed by RGBA_8888 bytes. Android's ARGB int packs
-     * A<<24|R<<16|G<<8|B, so the bytes are written R, G, B, A — the order the
-     * verifier's little-endian u32 read expects.
+     * u32 format = 1} followed by each pixel as an ARGB int in little-endian
+     * byte order. Android's ARGB int packs A<<24|R<<16|G<<8|B, so the four
+     * bytes are B, G, R, A; a little-endian u32 read of them gives the ARGB
+     * value back, which is what {@code centre_pixel} compares with
+     * {@code 0xff00ff00}.
      */
     private void writeRaw(Bitmap bitmap) {
         if (bitmap == null) {
@@ -753,11 +770,25 @@ public class M0bCheckActivity extends Activity {
     }
 
     private static void markSent(File evidence) {
-        File sent = new File(evidence.getParentFile(), evidence.getName() + SENT_SUFFIX);
+        File directory = evidence.getParentFile();
+        File sent = new File(directory, evidence.getName() + SENT_SUFFIX);
         if (!evidence.renameTo(sent)) {
             // A rename that fails must not leave the file pending, or every
             // launch would offer the same bundle again.
-            evidence.delete();
+            deleteQuietly(evidence);
+        }
+        // The raw frame and log belong to this run only. Leaving them behind
+        // is how a later, unsampled run could find an old green frame; the
+        // next run deletes them again at start, and this keeps them from
+        // being mistaken for current evidence in between.
+        deleteQuietly(new File(directory, EVIDENCE_RAW));
+        deleteQuietly(new File(directory, EVIDENCE_LOG));
+    }
+
+    private static void deleteQuietly(File file) {
+        if (file.exists()) {
+            // Best effort: the evidence is already inside the shared zip.
+            file.delete();
         }
     }
 

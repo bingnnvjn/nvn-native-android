@@ -177,6 +177,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// The evidence JSON the app writes. `commit` / `run_id` are fixed so the
 /// ledger assertions have a known value.
 fn evidence_json(model: &str) -> Vec<u8> {
+    evidence_json_fields(model, true, "0xff00ff00")
+}
+
+fn evidence_json_fields(model: &str, pixel_sampled: bool, pixel_rgba: &str) -> Vec<u8> {
     format!(
         "{{\"scenario\":\"m0b\",\"source\":\"app\",\
          \"commit\":\"{}\",\"apk_sha256\":\"{}\",\"pack_id\":\"none\",\
@@ -184,11 +188,13 @@ fn evidence_json(model: &str) -> Vec<u8> {
          \"vulkan_api\":\"unknown\",\"page_size\":\"4096\",\
          \"run_id\":\"20261128T120000Z-1234\",\"ts_utc\":\"2026-11-28T12:00:00Z\",\
          \"m0a_machine_green\":true,\"surface_generation\":1,\"presents\":1,\
-         \"pixel_rgba\":\"0xff00ff00\",\"surface_destroyed_still_submitting\":false,\
-         \"crashed\":false}}",
+         \"pixel_rgba\":{},\"pixel_sampled\":{},\
+         \"surface_destroyed_still_submitting\":false,\"crashed\":false}}",
         "0123456789abcdef0123456789abcdef01234567",
         "a".repeat(64),
         quote(model),
+        quote(pixel_rgba),
+        pixel_sampled,
     )
     .into_bytes()
 }
@@ -774,5 +780,151 @@ fn bundle_missing_private_root_exits_3() {
         3,
         "a missing private root is unprepared; stderr: {}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn bundle_stale_raw_not_resampled_exits_2() {
+    let root = TempDir::new("not-sampled-root");
+    let work = TempDir::new("not-sampled-work");
+    // A green raw is present (an old file), but this run says it did not
+    // sample: the old frame must not be allowed to make it green.
+    let evidence = evidence_json_fields("Fake Model", false, "0xff00ff00");
+    let raw = raw_frame(GREEN_PIXEL);
+    let log = format!("{RUN_HEADER}{ATTACH_SNAPSHOT}{DETACH_SNAPSHOT}").into_bytes();
+    let files: Vec<(&str, &[u8])> = vec![
+        ("m0b.json", &evidence),
+        ("screen.raw", &raw),
+        ("nva-shell.log", &log),
+    ];
+    let bundle = write_bundle(work.path(), &evidence, &raw, &log, &files);
+
+    let output = run_bundle(root.path(), &bundle, None);
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 2,
+        "an unsampled run must not be called green; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("pixel_sampled"),
+        "the reason must name the missing sample; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn bundle_pixel_rgba_disagrees_with_raw_exits_2() {
+    let root = TempDir::new("disagree-root");
+    let work = TempDir::new("disagree-work");
+    // The JSON claims red while the raw frame is green: the two sources of the
+    // pixel must agree before the frame can be judged.
+    let evidence = evidence_json_fields("Fake Model", true, "0xff0000ff");
+    let raw = raw_frame(GREEN_PIXEL);
+    let log = format!("{RUN_HEADER}{ATTACH_SNAPSHOT}{DETACH_SNAPSHOT}").into_bytes();
+    let files: Vec<(&str, &[u8])> = vec![
+        ("m0b.json", &evidence),
+        ("screen.raw", &raw),
+        ("nva-shell.log", &log),
+    ];
+    let bundle = write_bundle(work.path(), &evidence, &raw, &log, &files);
+
+    let output = run_bundle(root.path(), &bundle, None);
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(code, 2, "a pixel claim that disagrees with the raw frame is evidence disagreement; stderr: {stderr}");
+    assert!(
+        stderr.contains("disagrees"),
+        "the reason must name the disagreement; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn bundle_retains_evidence_in_private_root() {
+    use nva_verify::json::Value;
+
+    let root = TempDir::new("retain-root");
+    let work = TempDir::new("retain-work");
+    let (evidence, raw, log) = green_parts(GREEN_PIXEL);
+    let files: Vec<(&str, &[u8])> = vec![
+        ("m0b.json", &evidence),
+        ("screen.raw", &raw),
+        ("nva-shell.log", &log),
+    ];
+    let bundle = write_bundle(work.path(), &evidence, &raw, &log, &files);
+
+    let output = run_bundle(root.path(), &bundle, None);
+    assert_eq!(exit_code(&output), 0, "stderr: {}", stderr(&output));
+
+    let entry = ledger_entry(root.path());
+    let run_id = entry
+        .get("run_id")
+        .and_then(Value::as_str)
+        .expect("the ledger names the run")
+        .to_string();
+    let retained = root.path().join("evidence").join("109").join(&run_id);
+    let mut expected: Vec<(String, String)> = Vec::new();
+    for name in ["m0b.json", "nva-shell.log", "screen.raw"] {
+        let path = retained.join(name);
+        let bytes = fs::read(&path)
+            .unwrap_or_else(|error| panic!("retained {} is missing: {error}", path.display()));
+        expected.push((name.to_string(), sha256_hex(&bytes)));
+    }
+    expected.sort_by(|left, right| left.0.cmp(&right.0));
+    let expected: Vec<String> = expected.into_iter().map(|(_, hash)| hash).collect();
+
+    let ledger_hashes: Vec<String> = entry
+        .get("evidence_sha256")
+        .and_then(Value::as_array)
+        .expect("evidence_sha256 is an array")
+        .iter()
+        .map(|value| value.as_str().expect("a hash string").to_string())
+        .collect();
+    assert_eq!(
+        ledger_hashes, expected,
+        "the ledger hashes the retained copies, not just the zip entries"
+    );
+
+    let retained_evidence = fs::read(retained.join("m0b.json")).expect("read the retained JSON");
+    assert_eq!(
+        retained_evidence, evidence,
+        "the retained m0b.json is the bundle's bytes"
+    );
+}
+
+#[test]
+fn bundle_with_scenario_exits_2() {
+    let root = TempDir::new("both-carriers-root");
+    let work = TempDir::new("both-carriers-work");
+    let (evidence, raw, log) = green_parts(GREEN_PIXEL);
+    let files: Vec<(&str, &[u8])> = vec![
+        ("m0b.json", &evidence),
+        ("screen.raw", &raw),
+        ("nva-shell.log", &log),
+    ];
+    let bundle = write_bundle(work.path(), &evidence, &raw, &log, &files);
+
+    // `--scenario` and `--from-bundle` are different carriers; asking for both
+    // is a usage error, not a silent preference for one.
+    let output = Command::new(env!("CARGO_BIN_EXE_nva-verify"))
+        .args([
+            "device",
+            "--scenario",
+            "m0b",
+            "--from-bundle",
+            bundle.to_str().expect("utf-8 bundle"),
+            "--private-root",
+            root.path().to_str().expect("utf-8 root"),
+        ])
+        .output()
+        .expect("run nva-verify");
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 2,
+        "two carriers at once are a usage error; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("mutually exclusive") || stderr.contains("scenario"),
+        "the reason must name the carrier conflict; stderr: {stderr}"
     );
 }

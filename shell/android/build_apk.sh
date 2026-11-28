@@ -80,7 +80,16 @@ VERSION_NAME="$VERSION_MINOR ($BUILD_DATE)"
 VERSION_CODE=$(printf '%s' "$BUILD_DATE" | tr -d '-')
 # The commit the acceptance evidence names (#109). Read at build time so the
 # phone cannot claim a tree it was not built from; the verifier records it in
-# the private ledger. A build outside a git checkout says `unknown`.
+# the private ledger. A dirty tree is refused outright: stamping a clean HEAD
+# onto a package built from uncommitted bytes would make the evidence name the
+# wrong code, which is worse than not building. A build outside a git checkout
+# says `unknown`.
+DIRTY=$(git -C "$REPO" status --porcelain 2>/dev/null || true)
+if [ -n "$DIRTY" ]; then
+    echo "error: working tree is dirty; refusing to embed a commit that does not name this tree" >&2
+    printf '%s\n' "$DIRTY" >&2
+    exit 1
+fi
 COMMIT=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)
 if [ -z "$COMMIT" ]; then
     COMMIT=unknown

@@ -19,8 +19,8 @@ use std::process::{Command, Stdio};
 
 use crate::device::{
     append_ledger, bool_word, centre_pixel, ensure_json_inside_root, ensure_private_root, fail,
-    has_detached_submit, is_sha256, ready_attach, result_word, utc_now, verdict_m0b, Failure,
-    LedgerEntry, M0bFacts, PixelError,
+    has_detached_submit, is_sha256, ready_attach, result_word, sha256_file, utc_now, verdict_m0b,
+    Failure, LedgerEntry, M0bFacts, PixelError,
 };
 use crate::json::{self, Value};
 use crate::loadplan::{EXIT_MISMATCH, EXIT_STALE_FIXTURE};
@@ -170,9 +170,13 @@ struct Report {
     ts_utc: String,
     identity: Identity,
     facts: M0bFacts,
-    /// Evidence digests in ledger order (name ascending).
+    /// Evidence digests in ledger order (name ascending), computed from the
+    /// copies retained under `<private-root>/evidence/109/<run_id>/`.
     evidence_sha256: Vec<String>,
     m0a_machine_green: bool,
+    /// `m0b.json`'s own pixel claim, cross-checked against `screen.raw`.
+    pixel_sampled: bool,
+    recorded_pixel: u32,
     detail: String,
 }
 
@@ -187,6 +191,8 @@ impl Report {
             facts: M0bFacts::empty(),
             evidence_sha256: Vec::new(),
             m0a_machine_green: false,
+            pixel_sampled: false,
+            recorded_pixel: 0,
             detail: String::new(),
         }
     }
@@ -195,12 +201,22 @@ impl Report {
     /// `self` even when a later step fails, so a failure still reaches the
     /// evidence JSON and the ledger.
     fn evaluate(&mut self) -> Result<i32, Failure> {
-        let manifest = read_manifest(&self.options.bundle)?;
+        // An absolute path cannot be read as an option by `unzip`, and the
+        // entry names are validated before they reach the command line.
+        let zip = fs::canonicalize(&self.options.bundle).map_err(|error| {
+            fail(
+                EXIT_STALE_FIXTURE,
+                format!(
+                    "cannot resolve bundle {}; the evidence is unreadable or stale: {error}",
+                    self.options.bundle.display()
+                ),
+            )
+        })?;
+        let manifest = read_manifest(&zip)?;
 
-        let mut hashes: Vec<(String, String)> = Vec::with_capacity(manifest.len());
         let mut contents: Vec<(String, Vec<u8>)> = Vec::with_capacity(manifest.len());
         for (name, expected) in &manifest {
-            let bytes = read_entry(&self.options.bundle, name)?;
+            let bytes = read_entry(&zip, name)?;
             let actual = sha256_bytes(&bytes)?;
             if &actual != expected {
                 return Err(fail(
@@ -208,20 +224,98 @@ impl Report {
                     format!("{name} does not match sha256.txt; the bundle is stale"),
                 ));
             }
-            hashes.push((name.clone(), actual));
             contents.push((name.clone(), bytes));
         }
-        hashes.sort_by(|left, right| left.0.cmp(&right.0));
-        self.evidence_sha256 = hashes.into_iter().map(|(_, hash)| hash).collect();
 
         let evidence = take(&mut contents, EVIDENCE_JSON)?;
         let raw = take(&mut contents, EVIDENCE_RAW)?;
         let log = take(&mut contents, EVIDENCE_LOG)?;
 
-        self.parse_evidence(&evidence)?;
+        // Retain the bytes before judging (P1): even a mismatch-led run leaves
+        // the exact evidence the ledger hashes point at. Retaining under the
+        // bundle's run id happens after `parse_evidence` sets it.
+        let parsed = self.parse_evidence(&evidence);
+        self.retain_evidence(&evidence, &raw, &log)?;
+        parsed?;
+
+        // The raw frame is the only pixel source. `pixel_sampled` must be true
+        // and `m0b.json`'s claim must match the frame, so a stale raw file from
+        // an earlier run cannot make a new, unsampled run look green.
+        if !self.pixel_sampled {
+            return Err(fail(
+                EXIT_MISMATCH,
+                "m0b.json pixel_sampled is false; the frame was not sampled and cannot be \
+                 called green",
+            ));
+        }
         let pixel = centre_pixel(&raw).map_err(pixel_failure)?;
+        if self.recorded_pixel != pixel {
+            return Err(fail(
+                EXIT_MISMATCH,
+                format!(
+                    "m0b.json pixel_rgba 0x{:08x} disagrees with screen.raw 0x{pixel:08x}",
+                    self.recorded_pixel
+                ),
+            ));
+        }
         self.parse_log(&log, pixel)?;
         Ok(verdict_m0b(&self.facts))
+    }
+
+    /// Copies the three evidence files into `<private-root>/evidence/109/
+    /// <run_id>/` and computes the ledger digests from those copies, so the
+    /// retained bytes can be re-hashed later and still match the ledger.
+    fn retain_evidence(&mut self, evidence: &[u8], raw: &[u8], log: &[u8]) -> Result<(), Failure> {
+        if !safe_run_id(&self.run_id) {
+            return Err(fail(
+                EXIT_MISMATCH,
+                format!(
+                    "m0b.json run_id {:?} is not a safe evidence directory name",
+                    self.run_id
+                ),
+            ));
+        }
+        let directory = self
+            .options
+            .private_root
+            .join("evidence")
+            .join("109")
+            .join(&self.run_id);
+        fs::create_dir_all(&directory).map_err(|error| {
+            fail(
+                EXIT_STALE_FIXTURE,
+                format!(
+                    "cannot create evidence directory {}: {error}",
+                    directory.display()
+                ),
+            )
+        })?;
+
+        let files: [(&str, &[u8]); 3] = [
+            (EVIDENCE_JSON, evidence),
+            (EVIDENCE_LOG, log),
+            (EVIDENCE_RAW, raw),
+        ];
+        let mut hashes: Vec<(String, String)> = Vec::with_capacity(files.len());
+        for (name, bytes) in files {
+            let path = directory.join(name);
+            fs::write(&path, bytes).map_err(|error| {
+                fail(
+                    EXIT_STALE_FIXTURE,
+                    format!("cannot retain {}: {error}", path.display()),
+                )
+            })?;
+            let digest = sha256_file(&path).map_err(|error| {
+                fail(
+                    EXIT_STALE_FIXTURE,
+                    format!("cannot hash retained {}: {error}", path.display()),
+                )
+            })?;
+            hashes.push((name.to_string(), digest));
+        }
+        hashes.sort_by(|left, right| left.0.cmp(&right.0));
+        self.evidence_sha256 = hashes.into_iter().map(|(_, hash)| hash).collect();
+        Ok(())
     }
 
     /// Fills the identity, `crashed` and `m0a_machine_green` from `m0b.json`.
@@ -245,6 +339,14 @@ impl Report {
         self.run_id = required_string(&value, "run_id")?;
         self.ts_utc = required_string(&value, "ts_utc")?;
         self.facts.crashed = required_bool(&value, "crashed")?;
+        self.pixel_sampled = required_bool(&value, "pixel_sampled")?;
+        let pixel_rgba = required_string(&value, "pixel_rgba")?;
+        self.recorded_pixel = parse_pixel_rgba(&pixel_rgba).ok_or_else(|| {
+            fail(
+                EXIT_MISMATCH,
+                format!("m0b.json pixel_rgba {pixel_rgba:?} is not a 0xAARRGGBB hex value"),
+            )
+        })?;
         self.m0a_machine_green = optional_bool(&value, "m0a_machine_green").unwrap_or(false);
         if let Some(model) = optional_string(&value, "device_model") {
             self.identity.device_model = model;
@@ -439,19 +541,36 @@ fn safe_entry_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
-/// Reads one zip entry through the system `unzip -p`.
+/// Reads one zip entry through the system `unzip -p`. The archive path is
+/// already absolute and every entry name is validated, so neither can be read
+/// as an option.
 ///
-/// A non-zero exit means the zip or the entry is unreadable, which is stale
-/// evidence (`4`). Some `unzip` builds return `0` with empty output for a
-/// missing entry; the SHA-256 comparison catches that later.
+/// Info-ZIP accepts `--`; busybox's applet treats it as a file name. The first
+/// attempt uses the separator; a failed attempt is retried without it. The
+/// absolute path and [`safe_entry_name`] already make option injection
+/// impossible, so the retry is a compatibility path, not a weaker check.
+///
+/// A non-zero result after both means the zip or the entry is unreadable, which
+/// is stale evidence (`4`). Some `unzip` builds return `0` with empty output for
+/// a missing entry; the SHA-256 comparison catches that later.
 fn read_entry(zip: &Path, name: &str) -> Result<Vec<u8>, Failure> {
-    let output = Command::new("unzip")
+    let with_separator = Command::new("unzip")
+        .arg("-p")
+        .arg("--")
+        .arg(zip)
+        .arg(name)
+        .output()
+        .map_err(|error| fail(EXIT_ORACLE, format!("cannot run unzip: {error}")))?;
+    if with_separator.status.success() {
+        return Ok(with_separator.stdout);
+    }
+    let without_separator = Command::new("unzip")
         .arg("-p")
         .arg(zip)
         .arg(name)
         .output()
         .map_err(|error| fail(EXIT_ORACLE, format!("cannot run unzip: {error}")))?;
-    if !output.status.success() {
+    if !without_separator.status.success() {
         return Err(fail(
             EXIT_STALE_FIXTURE,
             format!(
@@ -460,7 +579,26 @@ fn read_entry(zip: &Path, name: &str) -> Result<Vec<u8>, Failure> {
             ),
         ));
     }
-    Ok(output.stdout)
+    Ok(without_separator.stdout)
+}
+
+/// Parses `m0b.json`'s pixel claim: the `0xAARRGGBB` form the app writes with
+/// `String.format("%08x", argb)`. Anything else cannot be compared, so it is
+/// evidence disagreement.
+fn parse_pixel_rgba(text: &str) -> Option<u32> {
+    let digits = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))?;
+    if digits.len() != 8 || !digits.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok()
+}
+
+/// A run id becomes a directory name under the private root, so it must not
+/// escape it.
+fn safe_run_id(run_id: &str) -> bool {
+    safe_entry_name(run_id) && run_id.len() <= 128
 }
 
 /// SHA-256 of in-memory evidence through the system `sha256sum`, which reads
@@ -582,7 +720,7 @@ fn optional_bool(value: &Value, name: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_run, safe_entry_name};
+    use super::{last_run, parse_pixel_rgba, safe_entry_name, safe_run_id};
 
     #[test]
     fn safe_entry_names_reject_paths_and_options() {
@@ -592,6 +730,23 @@ mod tests {
         assert!(!safe_entry_name("dir/m0b.json"));
         assert!(!safe_entry_name("-p"));
         assert!(!safe_entry_name(""));
+    }
+
+    #[test]
+    fn pixel_rgba_must_be_eight_hex_digits() {
+        assert_eq!(parse_pixel_rgba("0xff00ff00"), Some(0xff00_ff00));
+        assert_eq!(parse_pixel_rgba("0XFF00FF00"), Some(0xff00_ff00));
+        assert_eq!(parse_pixel_rgba("ff00ff00"), None);
+        assert_eq!(parse_pixel_rgba("0xff00ff0"), None);
+        assert_eq!(parse_pixel_rgba("0xzzzzzzzz"), None);
+    }
+
+    #[test]
+    fn run_ids_must_be_safe_directory_names() {
+        assert!(safe_run_id("20261128T120000Z-1234"));
+        assert!(!safe_run_id("../96"));
+        assert!(!safe_run_id("a/b"));
+        assert!(!safe_run_id(""));
     }
 
     #[test]
