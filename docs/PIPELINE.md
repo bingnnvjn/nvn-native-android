@@ -237,7 +237,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/scan_personal.py` | 只查形状：盘符、WSL 挂载、home/Users 目录、数字 gpuinfo 报告 id；不建真实值 denylist | 打印文件:行 + 命中类型 |
 | `ci/guard/scan_apk.sh` | 条目黑名单、`assets/`、必需条目、体积、绝对路径、`f_<hex>` 符号 | 打印命中条目 |
 | `ci/guard/check_manifest.sh` | 包名/minSdk/targetSdk/ABI/权限/debuggable/签名 scheme/证书指纹 | 打印期望 vs 实际 |
-| `ci/guard/check_shell_apk.sh` | 产品壳（#46）：xmltree 断包名/`minSdk 26`/无 `debuggable`，`llvm-nm -D` 断 `JNI_OnLoad`，断 `lib/` 只有 `arm64-v8a`；#95：断 `libnva_runtime.so` 在包内并断其 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号 | 打印 xmltree 与 APK 条目 |
+| `ci/guard/check_shell_apk.sh` | 产品壳（#46）：xmltree 断包名/`minSdk 26`/无 `debuggable`，`llvm-nm -D` 断 `JNI_OnLoad`，断 `lib/` 只有 `arm64-v8a`；#95：断 `libnva_runtime.so` 在包内并断其 `nva_app_*` / `nva_gfx_*` / `nva_host_*` 与 `nva_nvn_bootstrap`，共 8 个代表符号；#109：xmltree 断 `M0bCheckActivity` 与 `EvidenceProvider` 均 `exported=false`，且 provider `grantUriPermissions=true` | 打印 xmltree 与 APK 条目 |
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
@@ -299,6 +299,12 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
   `--json` 省略时写 stdout。verifier 拒绝 PRIVACY §2 排除的挂载、git 工作树内的私有根，
   以及私有根之外的 `--json`（均退 `3`）；`apk_sha256` 由 verifier 从设备取回写入证据，
   与本地 APK 的比对是操作者步骤（GATES §1「取回本地比对」），CLI 不接收 `--apk`。
+- **M0b 无 adb 载体（#109）**：`nva-verify device --from-bundle <zip> --private-root <path> [--json <out>]`
+  是等价路径。应用内验收模式采集 `m0b.json` + `screen.raw` + `nva-shell.log` +
+  `sha256.txt` 的 zip，交回 PC；verifier 复用同一 `verdict_m0b` 与台账写入器，
+  退出码语义不变（无 adb 时这一点尤其重要：判定仍在被测应用之外）。zip 的来源、
+  退出码映射与 PixelCopy/MediaProjection 的取舍见 `docs/DEVICE-LOGS.md` §10。
+  #96 的 adb 路径保留；本证据可满足 #96 的真机 `[H]`。
 
 ## 9. 实测记录（2026-10-31）
 

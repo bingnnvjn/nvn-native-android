@@ -1,7 +1,7 @@
 # 里程碑门（M0–M3）
 
 > 来源：#22（评论为指针，本文件为权威正文）。证据全私有，见 #33。
-> 版本：v10（2026-11-15）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动；v7 只改 §3 变异测试的措辞并在 §9 记一条缺口，判据值不动；v8 只把 §3/§8 的旧字段名换成实际输出名 `validation_errors`（#48），判据值不动；v9 补布局断言清单守卫（#49），§3 变异测试回到「删一条 `_Static_assert`」，§9 把那条缺口换成更窄的一条（守条数，不守断言内容），判据值不动；v10 落地 §2.4 的九字段追加（#90），`nva_stats` 96 B / `NVA_STATS_VERSION = 2`，判据值不动。
+> 版本：v11（2026-11-28）。v1–v4 均经两遍审查；v5 只补 M0a 布局断言的第 4 条命令（NDK C++17）与四条命令的落位说明（#40）；v6 只把 `shell-apk` 启用（#46）带来的三处措辞改成现实，判据值不动；v7 只改 §3 变异测试的措辞并在 §9 记一条缺口，判据值不动；v8 只把 §3/§8 的旧字段名换成实际输出名 `validation_errors`（#48），判据值不动；v9 补布局断言清单守卫（#49），§3 变异测试回到「删一条 `_Static_assert`」，§9 把那条缺口换成更窄的一条（守条数，不守断言内容），判据值不动；v10 落地 §2.4 的九字段追加（#90），`nva_stats` 96 B / `NVA_STATS_VERSION = 2`，判据值不动；v11 只把 §1/§4 的来源扩为「exec-out 截图或应用内 PixelCopy/MediaProjection 的 bundle」，载体增加 `device --from-bundle`（#109），判据值不动。
 > 依据：#20（L0–L6 + C ABI v1）、#21（流水线）、#30（真机竖切）、#31（validation）、#33（公开边界）。
 
 ## 0. 效度边界
@@ -13,7 +13,7 @@
 ## 1. 总则
 
 - **门**：一组可执行判据；子门任一红 = 该里程碑未过。
-- **载体**：设备门由 `nva-verify device --scenario <id> --json <out>` 执行；PC 门由 `cargo run -p nva-verify -- smoke` 与 `cargo test` 执行。退出码沿用 #20 §3.8：`0` 通过 / `2` 不符 / `3` oracle 不可用 / `4` fixture 或 hash 过期。
+- **载体**：设备门由 `nva-verify device --scenario <id> --json <out>` 执行；应用内采集的等价载体是 `nva-verify device --from-bundle <zip> --private-root <path> [--json <out>]`（#109，无 adb）；PC 门由 `cargo run -p nva-verify -- smoke` 与 `cargo test` 执行。退出码沿用 #20 §3.8：`0` 通过 / `2` 不符 / `3` oracle 不可用 / `4` fixture 或 hash 过期。
 - **判据**：只认退出码与 JSON 字段；每个字段标来源（`stats` / `perfetto` / `dumpsys` / `getprop` / `logcat` / 像素）。
 - **身份字段现场取**：
 
@@ -25,6 +25,7 @@
 | `device_model` / `driver_version` / `vulkan_api` / `page_size` | `getprop` / `dumpsys SurfaceFlinger` / `getconf PAGE_SIZE` |
 | `run_id` / `ts_utc` | verifier 生成，写进 JSON，并作为证据文件名 |
 
+- **应用内 bundle 的来源（#109）**：载体是 `--from-bundle` 时，`commit`（构建时嵌入）、`apk_sha256`（应用读 `sourceDir` 自算）、`device_model` / `page_size`、`run_id` / `ts_utc` 取自 zip 内的 `m0b.json`；`pack_id` / `build_id` 记 `none`，`driver_version` / `vulkan_api` 记 `unknown`（不新增 ABI 导出）。身份字段仍是现场取，只是改为在设备上的应用内现场取；判据值与判定逻辑不变（同一 `verdict_m0b`、同一台账写入器）。
 - **注入对照**：每个 `= 0` 的计数，必须在**同一次 scenario run** 内带 `injection{name,before,after}` 且 `delta ≥ 1`；注入在测量之前完成，测量窗口内不带注入。
 - **可停机的人手步骤**（进 New Game、SAF 选择）：scenario 允许 `operator_input` 暂停，JSON 记录 `operator_input{step,ts}`；不记为自动化。
 - **证据全私有**，仓库零验收数据；台账 `gate-ledger.jsonl`（私有）记 `{gate, commit, apk_sha256, pack_id, run_id, ts_utc, result, evidence_sha256[]}`。
@@ -110,7 +111,7 @@ done
 |---|---|---|
 | `surface_generation` | stats | 1 |
 | `presents` | stats | ≥1 |
-| `pixel_rgba` | exec-out 截图，取窗口中心 | `0xff00ff00` |
+| `pixel_rgba` | exec-out 截图**或**应用内 PixelCopy/MediaProjection 的 bundle（`--from-bundle` 的 `screen.raw`），取窗口中心 | `0xff00ff00` |
 | `surface_destroyed_still_submitting` | stats + logcat | 无 |
 
 - 反证：HOME 后 `presents` 不增、不崩。

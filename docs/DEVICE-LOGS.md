@@ -1,6 +1,6 @@
 # 设备日志（#99、#101、#94）
 
-> 来源：票 #99（Parent #89）；§8 来自 #101（运行时事件）；§9 来自 #94（统计快照）。状态：v4（2026-11-28，新增 §9；v3 及更早见文件历史）。
+> 来源：票 #99（Parent #89）；§8 来自 #101（运行时事件）；§9 来自 #94（统计快照）；§10 来自 #109（验收包）。状态：v5（2026-11-28，新增 §10；v4 及更早见文件历史）。
 > 依据：#91（壳事件与词表）、docs/ARCHITECTURE.md §3.7（壳生命周期）、#101（`nva_platform.log`）、#94（观测契约）。
 > 代码：`shell/android/jni/nva_shell_jni.c`（写）、`shell/android/java/com/bingnnvjn/nva/LogProvider.java`（读）、`crates/nva-verify/src/statslog.rs`（解析）。
 
@@ -266,4 +266,51 @@ adb logcat -d -s nva-stats          # run 之后只取快照
   的计数归零会被判 `OutOfOrder`。
 - **不前置门**：`validation_available` / `validation_errors` 只写进证据 JSON，
   不参与 M0b 判定；产品包恒 `0` 既不是绿的理由，也不是红的理由。
+
+## 10. 验收包：应用内采集 + PC 判定（#109）
+
+没有 adb 时，M0b 证据由**应用自己采集**、由 **PC 侧同一 verifier** 判定。判定逻辑
+（`verdict_m0b` 的 4+1 条）与台账写入器和 #96 的 adb 路径完全共用，差别只在载体：
+证据来自一个 zip，而不是 `adb` 命令。
+
+**应用内流程**（真机由操作者执行）：
+
+1. 打开应用，点「M0b 验收」。主界面先 `appDestroy` 再启动独立的
+   `M0bCheckActivity`，所以验收运行有自己的 `=== run` 头和 `generation=1`。
+2. 验收屏 attach 一个 `SurfaceView`，运行时照常出首帧；应用等 `presents >= 1`
+   后用 **PixelCopy** 取窗口中心（不需要权限），同时把整帧写成 `screen.raw`。
+3. 屏幕提示「请按一次 HOME 键」。按 HOME 触发 `onStop` / `surfaceDestroyed`：
+   应用 detach 窗口，运行时的 detach 快照与 `detached_submit` 信号照 §9 写进
+   `nva-shell.log`；证据升级为 `complete`。
+4. 再次打开应用（或点图标把验收屏带回前台）时，应用生成 zip 并弹分享面板。
+   分享后 `m0b.json` 改名为 `.sent`，同一份证据不会反复弹出。
+
+**zip 内容**（四项，`sha256.txt` 按文件名升序列出前三项）：
+
+| 条目 | 内容 |
+|---|---|
+| `m0b.json` | 身份字段、`m0a_machine_green`、attach/detach 计数、`pixel_rgba`、`pixel_sampled` / `pixel_error`、`detached_submit`、`crashed`、`evidence`（`partial` / `complete`）、`run_id`、`ts_utc` |
+| `screen.raw` | `u32 width / u32 height / u32 format(=1 RGBA_8888)` + RGBA_8888 像素；PC 取窗口中心 |
+| `nva-shell.log` | §3–§9 的同一份文件；PC 只解析**最后一个 `=== run`** 之后的快照（跨 run 计数会归零） |
+| `sha256.txt` | `<hex>  <文件名>`，按文件名升序；PC 用系统 `sha256sum` 逐项校验 |
+
+**PC 判定**：
+
+```sh
+nva-verify device --from-bundle <zip> --private-root <path> [--json <out>]
+```
+
+- 解 zip 用系统 `unzip -p`；校验用系统 `sha256sum`（两者不可用 → 退 `3`）。
+- 退出码：`0` 通过；`2` 证据不符（坏 JSON / 缺字段 / 像素不符 / 无 attach 或
+  detach 快照 / 有 `detached_submit`）；`4` bundle 过期（缺条目、sha 不符、zip
+  不可读、`sha256.txt` 未恰好列三项）。
+- `--json` 必须在私有根内（否则退 `3`）；台账写同一 8 键，`commit` /
+  `apk_sha256` / `run_id` / `ts_utc` 用 bundle 携带的值，`evidence_sha256[]`
+  是三项证据按文件名升序的摘要。
+- **PixelCopy 结论**：窗口中心在真机上是否拿到 `0xff00ff00` 由 boss 的 [H]
+  运行决定。失败时 `m0b.json` 记 `pixel_error`、`screen.raw` 仍是可判定的帧
+  （PC 退 `2`），不把黑帧当绿。若真机确认 PixelCopy 不可用，切 MediaProjection
+  需要 `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` 与前台服务，
+  权限白名单与 manifest 一并更新。
+- 证据含设备型号：zip 落私有根、只分享给操作者；票面/公开评论只放 `run_id`。
 

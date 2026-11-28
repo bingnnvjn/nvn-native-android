@@ -1,5 +1,11 @@
 /*
- * JNI library for the product shell (#46, #91).
+ * JNI library for the product shell (#46, #91, #109).
+ *
+ * #109 moves the declared methods to `ShellNative` so `MainActivity` and
+ * `M0bCheckActivity` share one JNI surface over the same statics, and adds the
+ * acceptance read-outs (`shellCommit`, `shellStatsJson`). Neither is a new C ABI
+ * export: they are JNI calls into the runtime's existing query and a
+ * build-time string.
  *
  * #46 made this the smallest thing that satisfies docs/GATES.md §3: the library
  * exports JNI_OnLoad, and the activity makes one real JNI call so the export is
@@ -97,6 +103,16 @@
  */
 #ifndef SHELL_VERSION
 #define SHELL_VERSION "0.0 (unversioned build)"
+#endif
+
+/*
+ * The commit the acceptance evidence names (#109). `build_apk.sh` passes
+ * `git rev-parse HEAD`; a build outside that script says `unknown`, which the
+ * PC verifier records as-is. This is a build-time string, not a runtime git
+ * lookup — the phone has no checkout to ask.
+ */
+#ifndef SHELL_COMMIT
+#define SHELL_COMMIT "unknown"
 #endif
 
 /*
@@ -508,19 +524,70 @@ JNI_OnLoad(JavaVM *vm, void *reserved)
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_bingnnvjn_nva_MainActivity_shellInfo(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_shellInfo(JNIEnv *env, jclass clazz)
 {
-    (void)thiz;
+    (void)clazz;
     /* No status to report: the entry cannot fail. It still logs one line, so
      * every entry point appears in the file with the same shape. */
     shell_log("shellInfo status=%u", (unsigned)NVA_OK);
     return (*env)->NewStringUTF(env, "NVA shell " SHELL_VERSION " (JNI_OnLoad ran)");
 }
 
-JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appCreate(JNIEnv *env, jobject thiz, jstring data_dir)
+/*
+ * The build commit (#109). Like `shellInfo`, it cannot fail; the value is a
+ * compile-time string.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_bingnnvjn_nva_ShellNative_shellCommit(JNIEnv *env, jclass clazz)
 {
-    (void)thiz;
+    (void)clazz;
+    return (*env)->NewStringUTF(env, SHELL_COMMIT);
+}
+
+/*
+ * The runtime's counters as one single-line JSON object (#109).
+ *
+ * `nva_app_get_stats` is a query, not a new seam: the acceptance activity uses
+ * it to decide when the first frame has presented and to record the attach
+ * snapshot. It is not an event, so nothing is written to the log here.
+ *
+ * Returns NULL when there is no runtime object or the read is refused; Java
+ * treats that as "no snapshot yet" and keeps waiting. `attached` is this
+ * file's own window reference, because `nva_stats` has no such field.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_bingnnvjn_nva_ShellNative_shellStatsJson(JNIEnv *env, jclass clazz)
+{
+    (void)clazz;
+    if (g_app == NULL) {
+        return NULL;
+    }
+    nva_stats stats;
+    memset(&stats, 0, sizeof stats);
+    stats.size = (uint32_t)sizeof stats;
+    stats.version = NVA_STATS_VERSION;
+    nva_status status = nva_app_get_stats(g_app, &stats);
+    if (status != NVA_OK) {
+        shell_log("stats read failed: status=%u", (unsigned)status);
+        return NULL;
+    }
+    char json[SHELL_LOG_LINE];
+    int n = snprintf(json, sizeof json,
+                     "{\"presents\":%u,\"surface_generation\":%u,\"attached\":%s,"
+                     "\"submits\":%llu}",
+                     (unsigned)stats.presents, (unsigned)stats.surface_generation,
+                     g_window != NULL ? "true" : "false",
+                     (unsigned long long)stats.submits);
+    if (n <= 0 || (size_t)n >= sizeof json) {
+        return NULL;
+    }
+    return (*env)->NewStringUTF(env, json);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_bingnnvjn_nva_ShellNative_appCreate(JNIEnv *env, jclass clazz, jstring data_dir)
+{
+    (void)clazz;
     if (g_app != NULL) {
         shell_log("app already created status=%u", (unsigned)NVA_ERR_INVALID_ARGUMENT);
         return NVA_ERR_INVALID_ARGUMENT;
@@ -604,34 +671,34 @@ static jint lifecycle_step(const char *step, const char *event, nva_status (*cal
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appStart(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appStart(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("start", "started", nva_app_start);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appPause(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appPause(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("pause", "paused", nva_app_pause);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appResume(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appResume(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("resume", "resumed", nva_app_resume);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appStop(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appStop(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     return lifecycle_step("stop", "stopped", nva_app_stop);
 }
 
@@ -641,10 +708,10 @@ Java_com_bingnnvjn_nva_MainActivity_appStop(JNIEnv *env, jobject thiz)
  * what it is told, and a 0-shaped window would be #93's problem to detect.
  */
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_windowAttached(JNIEnv *env, jobject thiz, jobject surface,
+Java_com_bingnnvjn_nva_ShellNative_windowAttached(JNIEnv *env, jclass clazz, jobject surface,
                                                    jint width, jint height, jint generation)
 {
-    (void)thiz;
+    (void)clazz;
     if (g_app == NULL) {
         shell_log("surface attached without an app status=%u", (unsigned)NVA_ERR_INVALID_ARGUMENT);
         return NVA_ERR_INVALID_ARGUMENT;
@@ -691,10 +758,10 @@ Java_com_bingnnvjn_nva_MainActivity_windowAttached(JNIEnv *env, jobject thiz, jo
 }
 
 JNIEXPORT jint JNICALL
-Java_com_bingnnvjn_nva_MainActivity_windowDetached(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_windowDetached(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     if (g_app == NULL) {
         shell_log("detach without an app status=%u", (unsigned)NVA_ERR_INVALID_ARGUMENT);
         return NVA_ERR_INVALID_ARGUMENT;
@@ -735,10 +802,10 @@ Java_com_bingnnvjn_nva_MainActivity_windowDetached(JNIEnv *env, jobject thiz)
  * same process reopens with a fresh header.
  */
 JNIEXPORT void JNICALL
-Java_com_bingnnvjn_nva_MainActivity_appDestroy(JNIEnv *env, jobject thiz)
+Java_com_bingnnvjn_nva_ShellNative_appDestroy(JNIEnv *env, jclass clazz)
 {
     (void)env;
-    (void)thiz;
+    (void)clazz;
     if (g_app == NULL) {
         /* Not a record line: nothing was destroyed. Worth saying anyway, since
          * it means `appCreate` never succeeded. */
@@ -768,9 +835,9 @@ Java_com_bingnnvjn_nva_MainActivity_appDestroy(JNIEnv *env, jobject thiz)
  * it as data and keeps it on one line.
  */
 JNIEXPORT void JNICALL
-Java_com_bingnnvjn_nva_MainActivity_nativeLog(JNIEnv *env, jobject thiz, jstring text)
+Java_com_bingnnvjn_nva_ShellNative_nativeLog(JNIEnv *env, jclass clazz, jstring text)
 {
-    (void)thiz;
+    (void)clazz;
     if (text == NULL) {
         return;
     }

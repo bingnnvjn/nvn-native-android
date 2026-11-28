@@ -96,6 +96,84 @@ if grep -q ':debuggable(' "$TMP/xmltree.txt"; then
   esac
 fi
 
+# #109: the acceptance screen and the evidence provider must be in the binary
+# manifest, both exported=false, and the provider must grant per-URI reads.
+# Parse the tree into component blocks: `:exported(` appears on several
+# components, so a global grep cannot say which one it belongs to. Both
+# build-tools spellings of a boolean are accepted (`(type 0x12)0x0` and
+# `false`), for the same reason the debuggable check above does.
+if ! python3 - "$TMP/xmltree.txt" <<'PY'
+import re
+import sys
+
+
+def parse(path):
+    components = []
+    stack = []
+    for raw in open(path, encoding="utf-8", errors="replace"):
+        line = raw.strip()
+        match = re.match(r"E:\s+(\S+)", line)
+        if match:
+            stack.append({"tag": match.group(1), "attrs": {}})
+            continue
+        match = re.match(r"A:.*:([A-Za-z0-9_]+)\([^)]*\)=(.*)", line)
+        if match and stack:
+            stack[-1]["attrs"].setdefault(match.group(1), match.group(2).strip())
+    return stack
+
+
+def boolean(value):
+    if value is None:
+        return None
+    value = value.strip()
+    if re.search(r"\(type 0x12\)0x0$", value):
+        return False
+    if re.search(r"\(type 0x12\)0x1$", value):
+        return True
+    if value.startswith("false"):
+        return False
+    if value.startswith("true"):
+        return True
+    return None
+
+
+def find(components, tag, needle):
+    for component in components:
+        if component["tag"] != tag:
+            continue
+        if needle in component["attrs"].get("name", ""):
+            return component
+    return None
+
+
+components = parse(sys.argv[1])
+problems = []
+activity = find(components, "activity", "M0bCheckActivity")
+if activity is None:
+    problems.append("missing <activity> .M0bCheckActivity")
+elif boolean(activity["attrs"].get("exported")) is not False:
+    problems.append("M0bCheckActivity exported=%r, expected false"
+                    % activity["attrs"].get("exported"))
+
+provider = find(components, "provider", "EvidenceProvider")
+if provider is None:
+    problems.append("missing <provider> .EvidenceProvider")
+else:
+    if boolean(provider["attrs"].get("exported")) is not False:
+        problems.append("EvidenceProvider exported=%r, expected false"
+                        % provider["attrs"].get("exported"))
+    if boolean(provider["attrs"].get("grantUriPermissions")) is not True:
+        problems.append("EvidenceProvider grantUriPermissions=%r, expected true"
+                        % provider["attrs"].get("grantUriPermissions"))
+
+for problem in problems:
+    print("SHELL-RED-LINE: " + problem, file=sys.stderr)
+sys.exit(1 if problems else 0)
+PY
+then
+  report "acceptance Activity/provider assertions failed (docs/GATES.md §3, #109)"
+fi
+
 python3 - "$APK" > "$TMP/entries.txt" <<'PY'
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1]) as z:
