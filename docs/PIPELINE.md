@@ -241,6 +241,7 @@ README 用 #16 §4 的中英措辞。发布说明用 `docs/RELEASE-NOTES-TEMPLAT
 | `ci/guard/check_artifact.sh` | 目录成员白名单、无中间产物、无密钥/媒体、tar/tgz/zip 成员解包、evidence 无后缀 ELF、sha256 自洽、无绝对路径 | 打印多余/缺失成员 |
 | `ci/guard/check_derived_ledger.py` | `DERIVED.md` 每行对得上文件与体积；未登记派生表；内容判据 | 打印缺失/孤儿/漂移 |
 | `ci/guard/check_docs.sh` | README 中英免责段、模板固定段（含「不含 import pack」）；复用 `scan_personal.py` 扫 public Markdown | 打印缺哪句或命中行 |
+| `ci/guard/check_private_root.sh` | 私有根守卫（PRIVACY §2）：拒 Windows/可移动挂载、云同步目录、非 ext4/btrfs/xfs/zfs、git 工作树；路径不存在取最近存在父级；git/realpath/findmnt 缺失判错（rc=2） | 打印不合规原因与路径 |
 | `ci/guard/check_style.sh` | 5 个产品 crate 的格式与 lint：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`；spike 树被 workspace 排除，不在门下 | 打印失败的是 fmt 还是 clippy，并附工具输出 |
 | `ci/guard/test_guards.sh` | 对 §7 的门做正反例自测；当前不覆盖 `scan_apk`、`check_manifest`、`check_derived_ledger`、`check_docs`（正例要真 APK 或真账本）；覆盖面见脚本内 `# --- <name> ---` 分节 | 打印失败用例（期望 rc vs 实际） |
 

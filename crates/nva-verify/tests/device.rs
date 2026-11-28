@@ -15,6 +15,7 @@ use std::process::{Command, Output};
 const FAKE_ADB: &str = r#"#!/bin/sh
 set -u
 state=${FAKE_STATE_DIR:?}
+printf '%s\n' "$*" >> "$state/commands.log"
 cmd=${1:-}
 shift || true
 case "$cmd" in
@@ -25,7 +26,7 @@ case "$cmd" in
       -d)
         cat "$state/attach.log"
         if [ -f "$state/home" ]; then
-          cat "$state/detach.log"
+          if [ "${FAKE_NO_DETACH:-0}" != 1 ]; then cat "$state/detach.log"; fi
           if [ "${FAKE_LATE_SIGNAL:-0}" = 1 ]; then
             if [ -f "$state/drained" ]; then
               cat "$state/signal.log"
@@ -69,12 +70,18 @@ case "$cmd" in
         touch "$state/home"
         exit 0 ;;
       pidof)
+        if [ "${FAKE_PID_EMPTY:-0}" = 1 ]; then exit 0; fi
         printf '%s\n' "${FAKE_PID:-4242}"
         exit 0 ;;
       *) exit 0 ;;
     esac ;;
   exec-out)
-    cat "$state/screen.raw"
+    if [ "${FAKE_PIXEL_RETRY:-0}" = 1 ] && [ ! -f "$state/retried" ]; then
+      touch "$state/retried"
+      cat "$state/screen-red.raw"
+    else
+      cat "$state/screen.raw"
+    fi
     exit 0 ;;
 esac
 exit 0
@@ -312,6 +319,10 @@ fn device_ledger_entry_is_eight_key_json() {
     let code = exit_code(&output);
     let stderr = stderr(&output);
     assert_eq!(code, 0, "a green fake run must pass; stderr: {stderr}");
+    assert!(
+        !stderr.contains("Fake Model"),
+        "stderr must not carry the device model; stderr: {stderr}"
+    );
 
     let evidence = fs::read_to_string(&json_path).expect("read the evidence JSON");
     let evidence = parse(&evidence).expect("the evidence file is JSON");
@@ -319,6 +330,11 @@ fn device_ledger_entry_is_eight_key_json() {
         evidence.get("result").and_then(Value::as_str),
         Some("pass"),
         "the evidence result must pass"
+    );
+    assert_eq!(
+        evidence.get("device_model").and_then(Value::as_str),
+        Some("Fake Model"),
+        "the model stays in the private evidence JSON"
     );
     for key in [
         "validation_available",
@@ -434,6 +450,12 @@ fn device_pixel_mismatch_exits_2() {
         "mismatch",
         "exit 2 maps to the mismatch result"
     );
+    let screencaps = fs::read_to_string(state.path().join("commands.log"))
+        .expect("read the fake adb command log")
+        .lines()
+        .filter(|line| *line == "exec-out screencap")
+        .count();
+    assert_eq!(screencaps, 2, "a red frame is retried once");
 }
 
 #[test]
@@ -625,6 +647,108 @@ fn device_late_detached_submit_signal_exits_2() {
         stderr.contains("detached_submit=true"),
         "the reason must name the signal; stderr: {stderr}"
     );
+}
+
+#[test]
+fn device_force_stops_the_package_before_starting() {
+    let repo = temp_git_repo("force-stop");
+    let root = TempDir::new("force-stop-root");
+    let state = TempDir::new("force-stop-state");
+    let adb = state.path().join("adb");
+    write_script(&adb);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
+    write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_SNAPSHOT);
+    let output = run_device(
+        repo.path(),
+        &fake_env(&adb, state.path()),
+        &device_args(root.path().to_str().expect("utf-8 root"), None),
+    );
+    assert_eq!(0, exit_code(&output), "stderr: {}", stderr(&output));
+
+    let commands = fs::read_to_string(state.path().join("commands.log"))
+        .expect("read the fake adb command log");
+    let force_stop = commands
+        .lines()
+        .position(|line| line == "shell am force-stop com.bingnnvjn.nva")
+        .expect("the run must force-stop the package");
+    let start = commands
+        .lines()
+        .position(|line| line == "shell am start -n com.bingnnvjn.nva/.MainActivity")
+        .expect("the run must start the activity");
+    assert!(
+        force_stop < start,
+        "force-stop must precede start so a repeat run keeps generation 1; commands:\n{commands}"
+    );
+}
+
+#[test]
+fn device_pixel_retry_after_the_first_frame_succeeds() {
+    let repo = temp_git_repo("pixel-retry");
+    let root = TempDir::new("pixel-retry-root");
+    let state = TempDir::new("pixel-retry-state");
+    let adb = state.path().join("adb");
+    write_script(&adb);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
+    write_raw_screencap(&state.path().join("screen-red.raw"), RED_PIXEL, 1);
+    write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_SNAPSHOT);
+    let mut envs = fake_env(&adb, state.path());
+    envs.push(("FAKE_PIXEL_RETRY", "1"));
+    let output = run_device(
+        repo.path(),
+        &envs,
+        &device_args(root.path().to_str().expect("utf-8 root"), None),
+    );
+
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 0,
+        "the second screenshot is green, so the retry passes; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn device_crash_before_detach_exits_2_with_crashed_evidence() {
+    use nva_verify::json::{parse, Value};
+
+    let repo = temp_git_repo("crash");
+    let root = TempDir::new("crash-root");
+    let state = TempDir::new("crash-state");
+    let adb = state.path().join("adb");
+    write_script(&adb);
+    write_raw_screencap(&state.path().join("screen.raw"), GREEN_PIXEL, 1);
+    write_logs(state.path(), ATTACH_SNAPSHOT, DETACH_SNAPSHOT);
+    let json_path = root.path().join("evidence").join("96").join("m0b.json");
+    let mut envs = fake_env(&adb, state.path());
+    envs.push(("FAKE_NO_DETACH", "1"));
+    envs.push(("FAKE_PID_EMPTY", "1"));
+    let output = run_device(
+        repo.path(),
+        &envs,
+        &device_args(
+            root.path().to_str().expect("utf-8 root"),
+            Some(json_path.to_str().expect("utf-8 json")),
+        ),
+    );
+
+    let code = exit_code(&output);
+    let stderr = stderr(&output);
+    assert_eq!(
+        code, 2,
+        "a dead process with no detach snapshot is a crash, not an unavailable device; stderr: {stderr}"
+    );
+    let evidence = parse(&fs::read_to_string(&json_path).expect("read the evidence JSON"))
+        .expect("the evidence file is JSON");
+    assert_eq!(
+        evidence.get("crashed"),
+        Some(&Value::Bool(true)),
+        "the crash must reach the evidence JSON"
+    );
+    assert_eq!(
+        evidence.get("result").and_then(Value::as_str),
+        Some("mismatch")
+    );
+    assert_eq!(ledger_result(root.path()), "mismatch");
 }
 
 #[test]

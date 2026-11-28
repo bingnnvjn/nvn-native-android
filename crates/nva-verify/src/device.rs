@@ -39,18 +39,33 @@ const DETACH_TIMEOUT: Duration = Duration::from_secs(10);
 /// no `detached_submit` signal will follow it (the runtime writes the snapshot
 /// first and the signal second).
 const SIGNAL_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+/// The first frame may still be settling when the screen is captured; one
+/// short-delay retry is the spec's allowance (`#89` spec:74).
+const PIXEL_RETRY_DELAY: Duration = Duration::from_millis(200);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// A failed pre-step: the exit code the CLI returns and the reason on stderr.
 struct Failure {
     exit: i32,
     detail: String,
+    /// Facts observed before the failure, when they must still reach the
+    /// evidence JSON (for example a crash that blocks the detach snapshot).
+    facts: Option<M0bFacts>,
 }
 
 fn fail(exit: i32, detail: impl Into<String>) -> Failure {
     Failure {
         exit,
         detail: detail.into(),
+        facts: None,
+    }
+}
+
+fn fail_with_facts(exit: i32, detail: impl Into<String>, facts: M0bFacts) -> Failure {
+    Failure {
+        exit,
+        detail: detail.into(),
+        facts: Some(facts),
     }
 }
 
@@ -92,6 +107,7 @@ pub fn run_cli(args: &[String]) -> i32 {
     report.capture = match capture_m0b(&adb) {
         Ok(capture) => Some(capture),
         Err(failure) => {
+            report.partial_facts = failure.facts;
             report.detail = failure.detail;
             return report.finish(failure.exit);
         }
@@ -492,27 +508,68 @@ struct Capture {
 /// disagreement (`2`).
 fn capture_m0b(adb: &Adb) -> Result<Capture, Failure> {
     adb.text(&["logcat", "-c"])?;
+    // A previous HOME run leaves the process alive; the shell increments its
+    // surface generation on the next `surfaceCreated`. Without force-stop a
+    // second acceptance run would attach with generation 2 and fail GATES §4's
+    // `surface_generation == 1` through no real defect.
+    adb.text(&["shell", "am", "force-stop", PACKAGE])?;
     adb.text(&["shell", "am", "start", "-n", ACTIVITY])?;
-    poll_snapshots(adb, ATTACH_TIMEOUT, "the attach snapshot", |snapshots| {
-        ready_attach(snapshots).is_some()
+    let (_, attach_snapshots) =
+        poll_snapshots(adb, ATTACH_TIMEOUT, "the attach snapshot", |snapshots| {
+            ready_attach(snapshots).is_some()
+        })?;
+    let attach = ready_attach(&attach_snapshots).ok_or_else(|| {
+        fail(
+            EXIT_MISMATCH,
+            "the run has no attach snapshot with presents >= 1",
+        )
     })?;
 
-    let raw = screencap(adb)?;
-    let pixel = centre_pixel(&raw).map_err(|error| match error {
-        PixelError::UnsupportedFormat(format) => fail(
-            EXIT_MISMATCH,
-            format!("screencap format {format} is not RGBA_8888; the pixel cannot be sampled"),
-        ),
-        PixelError::Malformed => fail(
-            EXIT_MISMATCH,
-            "screencap is not a raw RGBA frame whose header matches its length",
-        ),
-    })?;
+    let mut raw = screencap(adb)?;
+    let mut pixel = sample_pixel(&raw);
+    let retry = match &pixel {
+        Ok(value) => *value != PIXEL_GREEN,
+        Err(_) => true,
+    };
+    if retry {
+        thread::sleep(PIXEL_RETRY_DELAY);
+        raw = screencap(adb)?;
+        pixel = sample_pixel(&raw);
+    }
+    let pixel = pixel?;
 
     adb.text(&["shell", "input", "keyevent", "KEYCODE_HOME"])?;
-    let (logcat, _) = poll_snapshots(adb, DETACH_TIMEOUT, "the detach snapshot", |snapshots| {
+    let detach = poll_snapshots(adb, DETACH_TIMEOUT, "the detach snapshot", |snapshots| {
         snapshots.iter().any(|snapshot| !snapshot.attached)
-    })?;
+    });
+    let (logcat, _) = match detach {
+        Ok(result) => result,
+        Err(_) => {
+            // A missing detach snapshot with a dead process is a crash
+            // (evidence/HOME counter-proof, exit 2), not an unavailable
+            // device. Only a live process that never detaches is `3`.
+            if !process_alive(adb) {
+                let facts = M0bFacts {
+                    surface_generation: attach.surface_generation,
+                    presents: attach.presents,
+                    pixel,
+                    detached_submit: false,
+                    presents_before: attach.presents,
+                    presents_after: attach.presents,
+                    crashed: true,
+                };
+                return Err(fail_with_facts(
+                    EXIT_MISMATCH,
+                    "the process exited before the detach snapshot; the HOME counter-proof failed",
+                    facts,
+                ));
+            }
+            return Err(fail(
+                EXIT_ORACLE,
+                "timed out waiting for the detach snapshot",
+            ));
+        }
+    };
     let logcat = drain_signal(adb, logcat)?;
     let snapshots = statslog::parse_stream(&logcat).map_err(|error| {
         fail(
@@ -548,6 +605,22 @@ fn capture_m0b(adb: &Adb) -> Result<Capture, Failure> {
         raw,
         validation_available: attached.validation_available,
         validation_errors: attached.validation_errors,
+    })
+}
+
+/// Samples the centre pixel, mapping "cannot decode" to evidence disagreement
+/// (`2`). Format errors are included: a frame whose declared format is not
+/// RGBA_8888 cannot be compared with `0xff00ff00`.
+fn sample_pixel(raw: &[u8]) -> Result<u32, Failure> {
+    centre_pixel(raw).map_err(|error| match error {
+        PixelError::UnsupportedFormat(format) => fail(
+            EXIT_MISMATCH,
+            format!("screencap format {format} is not RGBA_8888; the pixel cannot be sampled"),
+        ),
+        PixelError::Malformed => fail(
+            EXIT_MISMATCH,
+            "screencap is not a raw RGBA frame whose header matches its length",
+        ),
     })
 }
 
@@ -750,6 +823,9 @@ struct Report {
     ts_utc: String,
     identity: Identity,
     capture: Option<Capture>,
+    /// Facts observed before a failure that still belong in the evidence JSON
+    /// (a crash before the detach snapshot).
+    partial_facts: Option<M0bFacts>,
     detail: String,
 }
 
@@ -762,24 +838,27 @@ impl Report {
             ts_utc,
             identity: Identity::unknown(),
             capture: None,
+            partial_facts: None,
             detail: String::new(),
         }
     }
 
     fn facts(&self) -> M0bFacts {
-        self.capture
-            .as_ref()
-            .map_or_else(M0bFacts::empty, |capture| capture.facts)
+        self.capture.as_ref().map_or_else(
+            || self.partial_facts.unwrap_or_else(M0bFacts::empty),
+            |capture| capture.facts,
+        )
     }
 
     fn success_detail(&self, code: i32) -> String {
         let facts = self.facts();
+        // The device model stays in the private evidence JSON only; stderr can
+        // be pasted into a ticket or a log, so it must not carry it.
         format!(
-            "m0b commit={} model={} surface_generation={} presents={} \
+            "m0b commit={} surface_generation={} presents={} \
              pixel_rgba=0x{:08x} detached_submit={} presents_before={} \
              presents_after={} crashed={} result={}",
             self.identity.commit,
-            self.identity.device_model,
             facts.surface_generation,
             facts.presents,
             facts.pixel,
