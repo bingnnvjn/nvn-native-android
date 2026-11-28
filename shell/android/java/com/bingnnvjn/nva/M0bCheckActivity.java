@@ -18,7 +18,10 @@ import android.view.Gravity;
 import android.view.PixelCopy;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import org.json.JSONObject;
@@ -91,6 +94,12 @@ public class M0bCheckActivity extends Activity {
     private int generation;
     private int attachedWidth;
     private int attachedHeight;
+    /**
+     * True once the operator pressed 开始 on the M0a declaration screen. No
+     * runtime object is created before this: cancellation leaves no evidence
+     * and no log line.
+     */
+    private boolean confirmed;
     /** True once phase-one evidence exists; guards the complete write. */
     private boolean started;
     /**
@@ -135,10 +144,89 @@ public class M0bCheckActivity extends Activity {
             return;
         }
         handler = new Handler(Looper.getMainLooper());
+        showDeclaration();
+    }
+
+    /**
+     * The M0a operator declaration. Nothing is created or written until the
+     * operator presses 开始: the declaration is an action, not something the
+     * code may assert on the operator's behalf (GATES §1).
+     */
+    private void showDeclaration() {
+        TextView message = new TextView(this);
+        message.setTextSize(18);
+        message.setPadding(48, 48, 48, 48);
+        message.setText("本验收假设 M0a 机器门已绿。\n\n"
+                + "点「开始」继续采集；点「取消」退出，不写任何证据。");
+
+        Button start = new Button(this);
+        start.setText("开始");
+        start.setOnClickListener(new ConfirmStart());
+        Button cancel = new Button(this);
+        cancel.setText("取消");
+        cancel.setOnClickListener(new ConfirmCancel());
+
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.setPadding(24, 24, 24, 24);
+        column.addView(message);
+        column.addView(start);
+        column.addView(cancel);
+
+        FrameLayout root = new FrameLayout(this);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        params.gravity = Gravity.CENTER;
+        root.addView(column, params);
+        setContentView(root);
+    }
+
+    private final class ConfirmStart implements View.OnClickListener {
+        @Override
+        public void onClick(View view) {
+            if (confirmed) {
+                return;
+            }
+            confirmed = true;
+            startAcceptance();
+        }
+    }
+
+    private final class ConfirmCancel implements View.OnClickListener {
+        @Override
+        public void onClick(View view) {
+            finish();
+        }
+    }
+
+    /**
+     * Begins the run after the operator's declaration. The identity and the
+     * timestamps are taken here, at the moment the run really starts, so the
+     * evidence does not carry the time the declaration screen was merely open.
+     */
+    private void startAcceptance() {
         runId = utcStamp("yyyyMMdd'T'HHmmss'Z'") + "-" + android.os.Process.myPid();
         tsUtc = utcStamp("yyyy-MM-dd'T'HH:mm:ss'Z'");
         collectIdentity();
 
+        // create/start/resume happen before the surface view exists, so no
+        // surface callback can reach a runtime that is not ready. onStart and
+        // onResume already ran while the declaration was showing; with
+        // `confirmed` false they did nothing, so the transitions are made here.
+        int status = ShellNative.appCreate(getFilesDir().getAbsolutePath());
+        if (status != NVA_OK) {
+            note("acceptance app create failed: status=" + status);
+        } else {
+            ShellNative.appStart();
+            ShellNative.appResume();
+            note("acceptance run " + runId + " on " + deviceModel
+                    + " / Android " + buildVersion);
+        }
+        showSurface();
+    }
+
+    private void showSurface() {
         FrameLayout root = new FrameLayout(this);
         surfaceView = new SurfaceView(this);
         surfaceView.getHolder().addCallback(new SurfaceEvents());
@@ -156,20 +244,12 @@ public class M0bCheckActivity extends Activity {
         promptParams.gravity = Gravity.CENTER;
         root.addView(prompt, promptParams);
         setContentView(root);
-
-        int status = ShellNative.appCreate(getFilesDir().getAbsolutePath());
-        if (status != NVA_OK) {
-            note("acceptance app create failed: status=" + status);
-        } else {
-            note("acceptance run " + runId + " on " + deviceModel
-                    + " / Android " + buildVersion);
-        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        if (!detached) {
+        if (confirmed && !detached) {
             ShellNative.appStart();
         }
     }
@@ -188,15 +268,17 @@ public class M0bCheckActivity extends Activity {
             finish();
             return;
         }
-        stopping = false;
-        ShellNative.appResume();
+        if (confirmed) {
+            stopping = false;
+            ShellNative.appResume();
+        }
     }
 
     @Override
     protected void onPause() {
         // Before super, like MainActivity: the runtime hears about the pause
         // while the surface is still valid.
-        if (!detached) {
+        if (confirmed && !detached) {
             ShellNative.appPause();
         }
         super.onPause();
@@ -207,7 +289,7 @@ public class M0bCheckActivity extends Activity {
         // A stop is the end of the run. The detach snapshot may still be
         // pending in surfaceDestroyed (if it has not fired yet), which rewrites
         // the same complete evidence once the window is really gone.
-        if (!detached) {
+        if (confirmed && !detached) {
             stopping = true;
             ShellNative.appStop();
             if (started) {
@@ -220,7 +302,9 @@ public class M0bCheckActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        ShellNative.appDestroy();
+        if (confirmed) {
+            ShellNative.appDestroy();
+        }
         super.onDestroy();
     }
 
@@ -289,7 +373,13 @@ public class M0bCheckActivity extends Activity {
             json.put("build_version", buildVersion);
             json.put("run_id", runId);
             json.put("ts_utc", tsUtc);
+            // The operator declared M0a green on the confirmation screen; this
+            // is their action, recorded as GATES §1's stoppable manual step.
             json.put("m0a_machine_green", true);
+            JSONObject declared = new JSONObject();
+            declared.put("step", "m0a_declared");
+            declared.put("ts", tsUtc);
+            json.put("operator_input", declared);
             json.put("surface_generation", attachGeneration);
             json.put("presents", attachPresents);
             json.put("presents_before", attachPresents);

@@ -115,6 +115,10 @@ done
 | `surface_destroyed_still_submitting` | stats + logcat | 无 |
 
 - 反证：HOME 后 `presents` 不增、不崩。
+- **bundle 载体的反证语义（#109）**：`--from-bundle` 的 `presents` 只作记录；
+  「HOME 后不再提交」由 `detached_submit` 信号缺席与 detach 后的状态判定
+  （attach/detach 快照 + 进程是否崩溃），与 #96 的裁定一致，不从 `presents`
+  的差值推断。判据值不变。
 - 红路径：像素不符 → 2；destroy 后仍提交 → 2。
 
 ## 5. M1 — 标题画面
